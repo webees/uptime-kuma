@@ -1,0 +1,3 @@
+uptime-kuma: cd /app && node server/server.js --port=5000
+caddy: caddy run --config /Caddyfile
+crontab: supercronic /crontab

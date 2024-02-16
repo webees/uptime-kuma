@@ -1,0 +1,27 @@
+app = "uptime-kuma"
+primary_region = "sjc"
+kill_signal = "SIGINT"
+kill_timeout = 5
+swap_size_mb = 256
+
+[build]
+  image = "ghcr.io/webees/uptime-kuma"
+
+[mounts]
+  source = "app_data"
+  destination = "/app/data"
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  min_machines_running = 1
+
+[checks]
+  [checks.health]
+    grace_period = "30s"
+    interval = "15s"
+    method = "get"
+    path = "/socket.io/?EIO=4&transport=polling"
+    port = 80
+    timeout = "10s"
+    type = "http"
