@@ -1,4 +1,4 @@
-FROM louislam/uptime-kuma:1.23.13-debian
+FROM louislam/uptime-kuma:2.0.0-beta.0
 
 WORKDIR /app
 
