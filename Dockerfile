@@ -47,7 +47,7 @@ RUN apt update && apt install -y --no-install-recommends \
         iptables \
         iputils-ping \
         tmux \
-        sqlite \
+        sqlite3 \
         msmtp \
         bsd-mailx \
 
