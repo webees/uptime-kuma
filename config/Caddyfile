@@ -33,6 +33,9 @@
 	}
 
 	reverse_proxy localhost:5000 {
-		header_up X-Real-IP {remote_host}
+		# Send the true remote IP to Rocket, so that vaultwarden can put this in the log
+		@cloudflare header Cf-Connecting-Ip *
+		header_up @cloudflare X-Real-IP {http.request.header.Cf-Connecting-Ip}
+		header_up !@cloudflare X-Real-IP {remote_host}
 	}
 }
