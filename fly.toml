@@ -26,7 +26,7 @@ swap_size_mb = 256
 [checks]
   [checks.health]
     type = "http"
-    port = 3001
+    port = 80
     method = "get"
     path = "/icon.svg"
     interval = "30s"
