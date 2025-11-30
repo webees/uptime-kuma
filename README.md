@@ -1,116 +1,54 @@
-# Uptime Kuma on Fly.io
+# 🐻 Uptime Kuma (Fly.io Edition)
 
-This project provides a customized Docker image for deploying [Uptime Kuma](https://github.com/louislam/uptime-kuma) (v2) on [Fly.io](https://fly.io/). It is enhanced with a process manager, cron scheduler, backup utilities, and a reverse proxy to provide a robust monitoring solution.
+![Fly.io](https://img.shields.io/badge/Fly.io-Deploy-purple?style=for-the-badge&logo=flydotio)
+![Docker](https://img.shields.io/badge/Docker-Container-blue?style=for-the-badge&logo=docker)
+![Uptime Kuma](https://img.shields.io/badge/Uptime%20Kuma-v2-green?style=for-the-badge)
+![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
-## ✨ Features
+> **TL;DR**: Uptime Kuma v2 on Fly.io with Caddy, Overmind, and Restic backups. 🚀
 
-- **Uptime Kuma v2**: The latest version of the fancy self-hosted monitoring tool.
-- **Overmind**: A process manager to handle multiple processes (Uptime Kuma, Caddy, Supercronic) within the single container.
-- **Caddy**: A powerful, enterprise-ready, open source web server with automatic HTTPS, acting as a reverse proxy.
-- **Supercronic**: A cron-compatible job runner for containers, used for scheduling backups.
-- **Restic**: A fast, secure, and efficient backup program.
-- **Fly.io Ready**: Optimized configuration for deployment on Fly.io.
+## ✨ Stack
+| Component | Role |
+| :--- | :--- |
+| **Uptime Kuma** | 📊 Monitoring |
+| **Overmind** | 🧠 Process Manager |
+| **Caddy** | 🔒 Reverse Proxy |
+| **Supercronic** | ⏰ Cron |
+| **Restic** | 💾 Backups |
 
-## 🚀 Deployment Guide
+## 🚀 Quick Start
 
-Follow these steps to deploy your own instance on Fly.io.
-
-### Prerequisites
-
-- A [Fly.io](https://fly.io/) account.
-- [flyctl](https://fly.io/docs/hands-on/install-flyctl/) installed on your machine.
-
-### Steps
-
-1.  **Login to Fly.io**
-    ```bash
-    fly auth login
-    ```
-
-2.  **Create the Application**
-    Replace `uptime-kuma` with your desired unique app name.
-    ```bash
-    fly apps create uptime-kuma
-    ```
-
-3.  **Configure Secrets**
-    Create a `.env` file with your sensitive configuration (e.g., Restic passwords, S3 credentials) and import them.
-    ```bash
-    # Example .env content
-    # RESTIC_PASSWORD=your_secure_password
-    # AWS_ACCESS_KEY_ID=...
-    # AWS_SECRET_ACCESS_KEY=...
-    
-    cat .env | fly secrets import
-    ```
-
-4.  **Create Persistent Storage**
-    Create a volume to store Uptime Kuma's database and data.
-    ```bash
-    fly volumes create app_data --size 1
-    ```
-
-5.  **Deploy**
-    Deploy the application using the configuration in `fly.toml`.
-    ```bash
-    fly deploy
-    ```
-
-## ⚙️ Configuration
-
-### Environment Variables
-
-The following environment variables can be set in your `.env` file or via `fly secrets set`:
-
-- `TZ`: Timezone (default: `Asia/Shanghai`).
-- `RESTIC_REPOSITORY`: Restic repository location (e.g., `s3:https://s3.amazonaws.com/bucket_name`).
-- `RESTIC_PASSWORD`: Password for the Restic repository.
-- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`: Credentials for S3 storage if used for backups.
-
-### Config Files
-
-- **`config/Caddyfile`**: Configuration for the Caddy web server.
-- **`config/crontab`**: Cron schedule for scheduled tasks (e.g., backups).
-- **`config/Procfile`**: Process definitions for Overmind.
-
-## 🛡️ Backup & Restore
-
-This image includes `restic` for backups. A helper script is available at `/restic.sh`.
-
-### Automatic Backups
-Backups are scheduled via `config/crontab`. By default, check the `config/crontab` file to see the schedule.
-
-### Manual Operations
-
-You can run commands inside the container using `fly ssh console`.
-
-**Trigger a Backup:**
+### 1️⃣ Deploy
 ```bash
-/restic.sh backup
+fly auth login
+fly apps create uptime-kuma
+fly volumes create app_data --size 1
+fly deploy
 ```
 
-**List Snapshots:**
+### 2️⃣ Configure Secrets
+Create `.env` and import:
 ```bash
-/restic.sh snapshots
+# .env
+# RESTIC_PASSWORD=xxx
+# AWS_ACCESS_KEY_ID=xxx
+# AWS_SECRET_ACCESS_KEY=xxx
+cat .env | fly secrets import
 ```
 
-**Restore:**
-```bash
-/restic.sh restore <snapshot-id>
-```
+## 🛠️ CLI
+Connect via `fly ssh console` and use the helpers:
 
-## 🛠️ Local Development
+| Command | Description |
+| :--- | :--- |
+| `/restic.sh backup` | 💾 Trigger manual backup |
+| `/restic.sh restore <id>` | ♻️ Restore snapshot |
+| `/restic.sh snapshots` | 📜 List snapshots |
 
-To build and run the image locally:
+## ⚙️ Config
+- **Caddy**: `config/Caddyfile`
+- **Cron**: `config/crontab`
+- **Procs**: `config/Procfile`
 
-```bash
-# Build the image
-docker build -t uptime-kuma-custom .
-
-# Run the container
-docker run -d \
-  -p 80:80 \
-  -v $(pwd)/data:/app/data \
-  --env-file .env \
-  uptime-kuma-custom
-```
+---
+Made with ❤️ for ☁️
