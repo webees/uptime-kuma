@@ -1,7 +1,8 @@
 app = "uptime-kuma"
 primary_region = "sin"
+
 kill_signal = "SIGINT"
-kill_timeout = 5
+kill_timeout = "10s"
 swap_size_mb = 256
 
 [build]
@@ -14,14 +15,20 @@ swap_size_mb = 256
 [http_service]
   internal_port = 80
   force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
   min_machines_running = 1
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 150
 
 [checks]
   [checks.health]
-    grace_period = "30s"
-    interval = "15s"
-    method = "get"
-    path = "/socket.io/?EIO=4&transport=polling"
-    port = 80
-    timeout = "10s"
     type = "http"
+    port = 3001
+    method = "get"
+    path = "/icon.svg"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "60s"
