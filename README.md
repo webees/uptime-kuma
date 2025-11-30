@@ -1,3 +1,4 @@
+```
 # 1️⃣ Log in to your Fly.io account (opens browser authentication)
 fly auth login
 
@@ -15,3 +16,4 @@ fly deploy
 
 # 6️⃣ Open an SSH console into the running Fly.io instance for debugging
 fly ssh console
+```
