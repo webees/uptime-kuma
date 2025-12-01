@@ -33,6 +33,7 @@ Create `.env` and import:
 # RESTIC_PASSWORD=xxx
 # AWS_ACCESS_KEY_ID=xxx
 # AWS_SECRET_ACCESS_KEY=xxx
+# DOMAINS="example.com:80 example.org:80" (Optional, overrides env)
 cat .env | fly secrets import
 ```
 
