@@ -1,4 +1,4 @@
-FROM louislam/uptime-kuma:nightly2
+FROM louislam/uptime-kuma:2.0.2
 
 # 🏗️ Args & Env
 ARG TARGETARCH
