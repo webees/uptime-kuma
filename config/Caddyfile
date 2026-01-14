@@ -10,7 +10,7 @@
 	}
 }
 
-{$DOMAINS} {
+{$DOMAINS::80} {
 	encode zstd gzip
 
 	header / {
