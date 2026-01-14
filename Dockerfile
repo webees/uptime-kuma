@@ -1,4 +1,4 @@
-FROM louislam/uptime-kuma:2.0.2
+FROM louislam/uptime-kuma:2.1.0-beta.2
 
 # 🏗️ Args & Env
 ARG TARGETARCH
@@ -17,7 +17,7 @@ COPY config/crontab config/Procfile config/Caddyfile scripts/restic.sh /
 
 # 🛠️ Install & Setup
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl gnupg ca-certificates openssl tzdata iptables iputils-ping tmux sqlite3 msmtp bsd-mailx \
+    curl gnupg ca-certificates openssl tzdata iptables iputils-ping tmux sqlite3 msmtp bsd-mailx \
     # 🔐 Caddy Repo
     && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
     && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list \
