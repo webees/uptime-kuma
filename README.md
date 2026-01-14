@@ -50,7 +50,10 @@
 ```bash
 fly auth login
 fly apps create uptime-kuma
+cat .env | fly secrets import
 fly volumes create app_data --region sin --size 1
+fly deploy
+fly ssh console
 ```
 
 ### 2. Configure Secrets
