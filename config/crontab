@@ -1,2 +1,5 @@
+# NTP time sync
+@hourly ntpdate -s pool.ntp.org >/dev/null 2>&1
+
+# Restic backup
 @hourly /restic.sh backup
-@hourly /usr/bin/find /var/log/restic/ -name "*.log" -type f -mmin +600 -exec rm -f {} \;

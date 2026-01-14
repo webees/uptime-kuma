@@ -71,7 +71,7 @@ fly secrets set SMTP_USERNAME="your@email.com"
 fly secrets set SMTP_PASSWORD="app-password"
 
 # Optional: Custom domains (default: :80)
-fly secrets set DOMAINS="example.com:80 example.org:80"
+fly secrets set CADDY_DOMAINS="example.com:80 example.org:80"
 ```
 
 ### 3. Deploy
@@ -168,7 +168,7 @@ tail -f /var/log/msmtp.log     # Email logs
 | `SMTP_TO` | ❌ | Recipient for backup alerts |
 | `SMTP_USERNAME` | ❌ | SMTP authentication user |
 | `SMTP_PASSWORD` | ❌ | SMTP authentication password |
-| `DOMAINS` | ❌ | Caddy domains (default: `:80`) |
+| `CADDY_DOMAINS` | ❌ | Caddy domains (default: `:80`) |
 
 ## 📝 License
 
