@@ -1,34 +1,33 @@
 app = "uptime-kuma"
-primary_region = "sin"
-
 kill_signal = "SIGINT"
 kill_timeout = "10s"
+primary_region = "sin"
 swap_size_mb = 256
 
-[build]
-  image = "ghcr.io/webees/uptime-kuma"
+# [build]
+# image = "ghcr.io/webees/uptime-kuma"
 
-[mounts]
-  source = "app_data"
-  destination = "/app/data"
+[checks.health]
+grace_period = "1m0s"
+interval = "30s"
+method = "get"
+path = "/icon.svg"
+port = 80
+timeout = "5s"
+type = "http"
 
 [http_service]
-  internal_port = 80
-  force_https = true
-  auto_stop_machines = false
-  auto_start_machines = true
-  min_machines_running = 1
-  [http_service.concurrency]
-    type = "requests"
-    soft_limit = 100
-    hard_limit = 150
+auto_start_machines = true
+auto_stop_machines = false
+force_https = true
+internal_port = 80
+min_machines_running = 1
 
-[checks]
-  [checks.health]
-    type = "http"
-    port = 80
-    method = "get"
-    path = "/icon.svg"
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "60s"
+  [http_service.concurrency]
+  hard_limit = 150
+  soft_limit = 100
+  type = "requests"
+
+[[mounts]]
+destination = "/app/data"
+source = "app_data"
