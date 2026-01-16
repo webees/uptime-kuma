@@ -1,5 +1,6 @@
-# NTP time sync
-@hourly ntpdate -s pool.ntp.org >/dev/null 2>&1
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║ Supercronic Crontab                                                       ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
 
-# Restic backup
+# Restic backup schedule
 @hourly /restic.sh backup

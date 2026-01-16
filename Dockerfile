@@ -1,5 +1,5 @@
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║ Uptime Kuma on Fly.io                                                     ║
+# ║ Fly.io Deployment                                                         ║
 # ║ https://github.com/webees/uptime-kuma                                     ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 FROM louislam/uptime-kuma:2.1.0-beta.2
@@ -38,18 +38,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sqlite3 \
     msmtp \
     bsd-mailx \
+    # Add Caddy repository
     && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
     | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
     && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
     | tee /etc/apt/sources.list.d/caddy-stable.list \
+    # Install additional packages
     && apt-get update && apt-get install -y --no-install-recommends \
     caddy \
     restic \
+    # Download binary tools
     && curl -fsSL "$SUPERCRONIC_URL" -o /usr/local/bin/supercronic \
     && curl -fsSL "$OVERMIND_URL" | gunzip -c - > /usr/local/bin/overmind \
+    && chmod +x /usr/local/bin/supercronic /usr/local/bin/overmind /restic.sh \
+    # Symlink msmtp for mail commands
     && ln -sf /usr/bin/msmtp /usr/bin/sendmail \
     && ln -sf /usr/bin/msmtp /usr/sbin/sendmail \
-    && chmod +x /usr/local/bin/supercronic /usr/local/bin/overmind /restic.sh \
+    # Cleanup
+    && apt -y autoremove \
     && rm -rf /var/lib/apt/lists/*
 
+# Clear base image entrypoint to allow Overmind to manage processes
+ENTRYPOINT []
 CMD ["overmind", "start"]

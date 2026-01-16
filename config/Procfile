@@ -1,3 +1,8 @@
-uptime-kuma: cd /app && node server/server.js --port=5000
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║ Overmind Process Configuration                                            ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+# Application services
+uptime-kuma: cd /app && node server/server.js --port=3001
 caddy: caddy run --config /Caddyfile
 crontab: supercronic /crontab
