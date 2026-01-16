@@ -25,17 +25,16 @@
 	# Always allow health checks bypass for Fly.io monitoring
 	# Uptime Kuma often uses icon.svg or just / for health checks
 	handle /icon.svg {
-		reverse_proxy localhost:3001
+		reverse_proxy 127.0.0.1:3001
 	}
 	handle /health {
 		respond "OK" 200
 	}
 
 	# Domain Access Control
-	# Block requests if CADDY_DOMAINS is set and host doesn't match
 	@outside_domain {
 		expression `{env.CADDY_DOMAINS} != ""`
-		not host {$CADDY_DOMAINS}
+		not host {$CADDY_DOMAINS:placeholder}
 	}
 	handle @outside_domain {
 		respond "Access Denied: Domain not allowed" 403
