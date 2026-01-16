@@ -1,8 +1,7 @@
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║ Fly.io Deployment                                                         ║
-# ║ https://github.com/webees/uptime-kuma                                     ║
+# ║ Uptime Kuma Deployment                                                    ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
-FROM louislam/uptime-kuma:2.1.0-beta.2
+FROM louislam/uptime-kuma:latest
 
 # ── Build Args ────────────────────────────────────────────────────────────────
 ARG TARGETARCH
@@ -58,6 +57,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt -y autoremove \
     && rm -rf /var/lib/apt/lists/*
 
-# Clear base image entrypoint to allow Overmind to manage processes
+# ── Startup ───────────────────────────────────────────────────────────────────
 ENTRYPOINT []
 CMD ["overmind", "start"]
