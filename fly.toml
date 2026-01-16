@@ -4,8 +4,8 @@ kill_timeout = "10s"
 primary_region = "sin"
 swap_size_mb = 256
 
-# [build]
-# image = "ghcr.io/webees/uptime-kuma"
+[build]
+image = "ghcr.io/webees/uptime-kuma"
 
 [checks.health]
 grace_period = "1m0s"
