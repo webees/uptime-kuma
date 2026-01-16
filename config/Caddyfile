@@ -25,7 +25,7 @@
 	# Always allow health checks bypass for Fly.io monitoring
 	# Uptime Kuma often uses icon.svg or just / for health checks
 	handle /icon.svg {
-		reverse_proxy 127.0.0.1:3001
+		reverse_proxy localhost:3001
 	}
 	handle /health {
 		respond "OK" 200
@@ -64,7 +64,7 @@
 		}
 
 		# Proxy to the application backend (Uptime Kuma)
-		reverse_proxy 127.0.0.1:3001 {
+		reverse_proxy localhost:3001 {
 			header_up X-Real-IP {http.request.header.Fly-Client-IP}
 			header_up X-Forwarded-For {http.request.header.Fly-Client-IP}
 		}
