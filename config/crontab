@@ -2,5 +2,9 @@
 # ║ Supercronic Crontab                                                       ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
-# Restic backup schedule
-@hourly /restic.sh backup
+# Keep jobs off minute zero, where a deploy restarts the machine.
+25 * * * * /restic.sh backup
+# Independent of backup: a dead scheduler must not look like a fresh backup.
+55 * * * * /restic.sh check-freshness
+# Drill the newest snapshot into an isolated directory on the first of a month.
+15 4 1 * * /restic.sh restore-test
