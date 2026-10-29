@@ -3,7 +3,22 @@ name: 🧹 GHCR Cleanup
 on:
   workflow_dispatch:
   schedule:
+    # A daily slot, plus the monthly `main` push at the top of this file: the
+    # schedule alone is not enough, GitHub disables a workflow after 60 days
+    # without activity (observed: `disabled_inactivity`), which silently stops
+    # tag pruning and lets the package grow forever.
     - cron: '0 3 * * *'
+  # A push to `main` keeps the workflow "active" without needing a manual run,
+  # and it also prunes right after a publish instead of up to a day later.
+  push:
+    branches:
+      - main
+
+# Shared with the publish workflow: a run that deletes tags must not delete a
+# `build-<run>-<attempt>` tag while that tag is still being smoke-tested.
+concurrency:
+  group: ghcr-registry
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -20,7 +35,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           packages: ${{ github.event.repository.name }}
           delete-untagged: true
-          older-than: 30 days
+          # A `build-<run>-<attempt>` tag is what the publish workflow records
+          # the digest from; keeping a week covers a stalled deploy review while
+          # still bounding the package. `latest` is never older than the last
+          # build, so it outlives this window on its own.
+          older-than: 7 days
+          keep-n-tagged: 10
           delete-ghost-images: true
           delete-partial-images: true
           delete-orphaned-images: true

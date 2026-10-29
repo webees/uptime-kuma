@@ -196,6 +196,39 @@ def assert_weekly_rebuild_is_scheduled(case: unittest.TestCase, build: str) -> N
     case.assertIn("github.ref == 'refs/heads/main'", build)
 
 
+def assert_cleanup_runs_and_cannot_race(case: unittest.TestCase, cleanup: str, build: str) -> None:
+    """A cleanup that never fires, or fires mid-publish, is worse than none.
+
+    GitHub disables a scheduled workflow after a long quiet period (observed
+    state: `disabled_inactivity`), so a schedule alone silently stops pruning.
+    And because the publish workflow records the digest from a
+    `build-<run>-<attempt>` tag, a concurrent cleanup can delete the very tag
+    being verified.
+    """
+    case.assertEqual(len(schedule_entries(cleanup)), 1, "one cleanup slot is expected")
+    case.assertIn("  push:\n    branches:\n      - main\n", cleanup)
+
+    def group(text: str) -> str | None:
+        match = re.search(r"(?m)^concurrency:\n(?:.*\n)*?\s*group:\s*(\S+)$", text)
+        return match.group(1) if match else None
+
+    case.assertEqual(
+        group(cleanup),
+        group(build),
+        "cleanup and publish must share one concurrency group",
+    )
+    # `cancel-in-progress: false` queues instead of killing a running publish.
+    case.assertIn("cancel-in-progress: false", cleanup)
+
+    # The publish tag is the digest source, so the window must outlive a stalled
+    # review; `latest` survives on its own because it is retagged every build.
+    window = re.search(r"(?m)^\s+older-than:\s+([1-9]\d*)\s+(day|days)$", cleanup)
+    case.assertIsNotNone(window, "cleanup needs a day-based older-than window")
+    case.assertGreaterEqual(int(window.group(1)), 7, "a shorter window can drop a tag still in review")
+    case.assertRegex(cleanup, r"(?m)^\s+keep-n-tagged:\s+[1-9]\d*$")
+    case.assertIn("delete-untagged: true", cleanup)
+
+
 IMAGE = "ghcr.io/example/uptime-kuma@sha256:" + "a" * 64
 
 
@@ -390,6 +423,34 @@ class RecurringContractTest(unittest.TestCase):
                         "node server/server.js"):
             self.assertIn(command, service)
         self.assertIn('ENTRYPOINT ["/entrypoint.sh"]', runtime)
+
+    def test_cleanup_keeps_running_and_cannot_race_a_publish(self) -> None:
+        cleanup = workflow("ghcr-cleanup.yml")
+        build = workflow("ghcr.yaml")
+        assert_cleanup_runs_and_cannot_race(self, cleanup, build)
+
+        # Mutation control 1: drop the `main` trigger, leaving only the schedule
+        # GitHub eventually disables.
+        scheduled_only = cleanup.replace(
+            "  push:\n    branches:\n      - main\n", "", 1
+        )
+        self.assertNotEqual(scheduled_only, cleanup)
+        with self.assertRaises(AssertionError):
+            assert_cleanup_runs_and_cannot_race(self, scheduled_only, build)
+
+        # Mutation control 2: give cleanup its own concurrency group, so it can
+        # delete the tag the publish job is still smoke-testing.
+        own_group = cleanup.replace("  group: ghcr-registry", "  group: ghcr-clean", 1)
+        self.assertNotEqual(own_group, cleanup)
+        with self.assertRaises(AssertionError):
+            assert_cleanup_runs_and_cannot_race(self, own_group, build)
+
+        # Mutation control 3: a one-day window can delete a tag whose deploy is
+        # still awaiting review, because the tag is the recorded digest source.
+        one_day = cleanup.replace("older-than: 7 days", "older-than: 1 day", 1)
+        self.assertNotEqual(one_day, cleanup)
+        with self.assertRaises(AssertionError):
+            assert_cleanup_runs_and_cannot_race(self, one_day, build)
 
 
 class RecurringMutationTest(unittest.TestCase):
