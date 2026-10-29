@@ -970,7 +970,7 @@ def check_lock_and_state(image: str) -> None:
     with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
         unwatched = mutate(
             RESTIC,
-            (("    # After initCfg so the mailer has its configuration when this warns.\n    stale_backup\n", ""),),
+            (('    [ "$command" = check-freshness ] || stale_backup\n', "    :\n"),),
             Path(tmp),
         )
         control = stale_case(str(now - 30 * 3600), source=unwatched)
@@ -978,6 +978,105 @@ def check_lock_and_state(image: str) -> None:
         suite.same(
             "C6 mutation: without the call a stale backup is silent",
             ["@ rc=0", "@ warn=0", "@ stale_mails=0"],
+            probes(control),
+        )
+
+    # The advisory only warns, so a scheduler that died with the app never
+    # surfaces. `check-freshness` is the scheduled gate that fails instead.
+    def freshness_case(
+        last_success: str, hours: str | None = None, source: Path | None = None
+    ) -> Case:
+        root = workspace()
+        env = {"FIXED_NOW": "1790000000", "SMTP_TO": "admin@example"}
+        if hours is not None:
+            env["RESTIC_STALE_HOURS"] = hours
+        return run(
+            image,
+            "mkdir -p /w/bin\n"
+            "printf '%s\\n' '#!/bin/bash'"
+            " 'if [ \"$1\" = -u ] && [ \"$2\" = +%s ]; then echo \"$FIXED_NOW\"; exit 0; fi'"
+            " 'exec /usr/bin/date \"$@\"' > /w/bin/date\n"
+            "printf '%s\\n' '#!/bin/bash' 'echo \"$*\" >> /w/mail.calls' > /w/bin/mail\n"
+            "chmod +x /w/bin/date /w/bin/mail\n"
+            f"printf 'state=ok\\nupdated_at=1\\nlast_success={last_success}\\nmessage=old\\n'"
+            " > /w/data/backup-status.txt\n"
+            "rc=0; PATH=\"/w/bin:$PATH\" /restic.sh check-freshness 2>/w/stderr || rc=$?\n"
+            "cat /w/stderr >&2\n"
+            "printf '@ rc=%s\\n' \"$rc\"\n"
+            "printf '@ state=%s\\n' \"$(sed -n 's/^state=//p' /w/data/backup-status.txt)\"\n"
+            "mails=0; [ ! -f /w/mail.calls ] || mails=\"$(grep -c 'Backup is stale' /w/mail.calls)\"\n"
+            "printf '@ stale_mails=%s\\n' \"$mails\"\n",
+            root,
+            env=env,
+            source=source,
+        )
+
+    # Past the window the gate fails, mails once and records the failure.
+    result = freshness_case(str(now - 30 * 3600))
+    expect_pass(suite, result, "C6 freshness gate case runs", "C6 freshness gate case failed")
+    suite.same(
+        "C6 a stale backup fails the scheduled gate",
+        ["@ rc=2", "@ state=failed", "@ stale_mails=1"],
+        probes(result),
+    )
+
+    # Exactly at the window is stale; one second inside is not, and neither
+    # walks the marker forward.
+    result = freshness_case(str(now - 26 * 3600))
+    expect_pass(suite, result, "C6 freshness threshold case runs", "C6 freshness threshold case failed")
+    suite.same(
+        "C6 exactly the window fails the gate without touching the state",
+        ["@ rc=2", "@ state=failed", "@ stale_mails=1"],
+        probes(result),
+    )
+
+    result = freshness_case(str(now - (26 * 3600 - 1)))
+    expect_pass(suite, result, "C6 freshness inside-window case runs", "C6 freshness inside-window case failed")
+    suite.same(
+        "C6 one second under the window passes quietly",
+        ["@ rc=0", "@ state=ok", "@ stale_mails=0"],
+        probes(result),
+    )
+
+    result = freshness_case("0")
+    expect_pass(suite, result, "C6 freshness no-history case runs", "C6 freshness no-history case failed")
+    suite.same(
+        "C6 a first run is not a failure",
+        ["@ rc=0", "@ state=ok", "@ stale_mails=0"],
+        probes(result),
+    )
+
+    # A clock behind the marker must not report an enormous negative age.
+    result = freshness_case(str(now + 3600))
+    expect_pass(suite, result, "C6 freshness future-stamp case runs", "C6 freshness future-stamp case failed")
+    suite.same(
+        "C6 a backwards clock stays quiet",
+        ["@ rc=0", "@ state=ok", "@ stale_mails=0"],
+        probes(result),
+    )
+
+    # Mutation control: the gate must depend on the comparison it just made.
+    # Making the inside-window branch unreachable turns a fresh backup red.
+    with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
+        loose = mutate(
+            RESTIC,
+            ((
+                "    if [ \"$age\" -lt \"$limit\" ]; then\n"
+                "        echo \"Last successful backup was ${age}s ago (limit ${limit}s)\"\n"
+                "        return 0\n"
+                "    fi\n",
+                "    if false; then\n"
+                "        echo \"Last successful backup was ${age}s ago (limit ${limit}s)\"\n"
+                "        return 0\n"
+                "    fi\n",
+            ),),
+            Path(tmp),
+        )
+        control = freshness_case(str(now - (26 * 3600 - 1)), source=loose)
+        expect_pass(suite, control, "C6 freshness mutation control runs", "C6 freshness mutation control failed")
+        suite.same(
+            "C6 mutation: without the age comparison a fresh backup fails the gate",
+            ["@ rc=2", "@ state=failed", "@ stale_mails=1"],
             probes(control),
         )
 

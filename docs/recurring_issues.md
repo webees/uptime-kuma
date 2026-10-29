@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: all 77 commits reachable through `90a21dc` on 2026-10-30,
-extending the previous 75-commit baseline at `83cefdd`. Every later round must
+Audit baseline: all 78 commits reachable through `944bd6b` on 2026-10-30,
+extending the previous 77-commit baseline at `90a21dc`. Every later round must
 extend that audit to every commit reachable at its start.
 
 ## Target-Mode Prompt
@@ -200,9 +200,20 @@ Staleness lives in `scripts/restic.sh:stale_backup`, called once from `main`
 after `load_status` and `initCfg` (so the mailer is configured); its window is
 bounded by `require_bounded_int`.
 
+The advisory is only reached when something else runs, so a scheduler that
+died with the application stayed silent by construction. The schedule itself is
+therefore part of the guard: `scripts/restic.sh:check_freshness` re-runs the
+same comparison as its own job at `:55` every hour and fails closed instead of
+warning, while `config/crontab` keeps `backup` (`:25`), `check-freshness` and
+the monthly `restore-test` as three separate duties, each off minute zero.
+`check_freshness` never stamps `last_success`, so a passing check cannot launder
+a stale backup.
+
 Mutation control: `tests/runtime_smoke.py:check_lock_and_state` (in-place status
-write, stale call removed) and `tests/runtime_smoke.py:check_process_supervision`
-(restartable application, non-restartable proxy).
+write, stale call removed, freshness comparison disabled) and
+`tests/runtime_smoke.py:check_process_supervision` (restartable application,
+non-restartable proxy); `tests/test_recurring_gate.py:test_restic_schedule_covers_backup_freshness_and_drill`
+collapses the schedule, moves a job to minute zero, and downgrades the drill.
 
 Regression gate: a held lock skips, an unusable status path fails closed, a stale
 running marker, an unknown state, an oversized marker, and a symlinked marker all
@@ -213,7 +224,11 @@ before any service starts. The stale window has its own cases: 30h warns and
 mails, exactly 26h warns, one second under stays quiet, no history stays quiet,
 and `0`, a fractional value, and an over-limit value fail with exit 2 naming the
 variable. Removing the call leaves a stale backup silent while the run still
-succeeds.
+succeeds. The gate adds its own cases: 30h and exactly 26h both exit 2 with
+`state=failed` and one mail, one second under passes, a first run passes, and a
+future stamp stays quiet; disabling the comparison turns the fresh case red.
+The crontab must keep exactly the three duties, both hourly jobs off minute
+zero, and the drill pinned to day 1.
 
 ## Address And Secret Input Audit
 

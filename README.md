@@ -129,10 +129,18 @@ fly apps restart               # Restart all instances
 ```bash
 /restic.sh backup              # Run manual backup
 /restic.sh snapshots           # List all snapshots
+/restic.sh check-freshness     # Fail if the last success is too old
 /restic.sh restore-test        # Drill the latest snapshot into /tmp
 RESTORE_CONFIRM=yes /restic.sh restore <id>   # Replace the live database
 /restic.sh test                # Test email notifications
 ```
+
+`supercronic` runs three jobs, each off minute zero so a deploy restart cannot
+cut one in half: `backup` at `:25` every hour, `check-freshness` at `:55` every
+hour, and `restore-test` at 04:15 on the first of each month. The freshness job
+is separate on purpose: the in-run warning only fires when something else
+executes, so a scheduler that died with the application would otherwise look
+fresh forever.
 
 Restore drills never touch `/app/data`. In-place restore stages the snapshot,
 verifies it, copies the current database to `kuma.db.previous`, swaps, then
@@ -142,8 +150,12 @@ confirmed healthy.
 Every run also compares the recorded `last_success` against the wall clock. When
 the last good backup is older than `RESTIC_STALE_HOURS` (default `26`, at most
 `8760`), the run still proceeds but warns on stderr and mails
-`Backup is stale` to `SMTP_TO`. A first run with no history never warns, and a
-single success clears the alert.
+`Backup is stale` to `SMTP_TO`. A first run with no history never warns, a
+backwards clock stays quiet, and a single success clears the alert.
+
+`check-freshness` is the same comparison with teeth: it exits `2`, lets the
+shared failure trap record `state=failed`, and mails once. It never rewrites
+`last_success`, so a passing check cannot make a stale backup look fresh.
 
 ### Log Inspection
 
@@ -198,8 +210,10 @@ fails when a class, a field, or a mutation control disappears.
   `gh run rerun --failed` (observed twice: `status 503`). The Fly CLI is
   installed from a sha256-pinned GitHub release, because the setup action
   resolved `latest` through Fly itself and failed there first.
-- Nothing triggers a restore drill or a real backup on a schedule; both were
-  proven inside the image only.
+- `check-freshness` fails the scheduled run and mails, but it can only report
+  through SMTP and `backup-status.txt`; if SMTP is misconfigured the failure
+  stays in the workflow-free cron log. The restore drill proves a snapshot is
+  readable and consistent, not that the application boots against it.
 
 ## 📝 License
 

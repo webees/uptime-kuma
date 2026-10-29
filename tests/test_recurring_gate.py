@@ -161,10 +161,10 @@ def unpinned_uses(text: str) -> list[str]:
 
 def assert_actions_are_pinned(case: unittest.TestCase, workflows: dict[str, str]) -> None:
     for name, text in workflows.items():
-        case.assertEqual(unpinned_uses(text), [], f"{name} has a mutable action reference")
-        case.assertEqual(
-            unlabelled_uses(text), [], f"{name} has a pinned action with no version comment"
-        )
+        for problem in unpinned_uses(text):
+            case.fail(f"{name}:{problem} is a mutable action reference")
+        for problem in unlabelled_uses(text):
+            case.fail(f"{name}:{problem} is pinned but carries no version comment")
 
 
 def unlabelled_uses(text: str) -> list[str]:
@@ -219,6 +219,46 @@ def assert_weekly_rebuild_is_scheduled(case: unittest.TestCase, build: str) -> N
     case.assertEqual(dow, "1", "the rebuild must run once a week")
     # A weekly schedule changes nothing if the chain is still gated on `main`.
     case.assertIn("github.ref == 'refs/heads/main'", build)
+
+
+CRONTAB = ROOT / "config/crontab"
+
+
+def cron_entries(text: str) -> list[list[str]]:
+    """Return the parsed schedule and command of every active crontab line."""
+    entries = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        entries.append(line.split(None, 5))
+    return entries
+
+
+def assert_backup_schedule_is_guarded(case: unittest.TestCase, text: str) -> None:
+    """A schedule nobody verifies can quietly stop being a schedule.
+
+    The backup, the freshness gate and the restore drill are three separate
+    duties: collapsing them back into a single `@hourly backup` leaves a dead
+    scheduler indistinguishable from a fresh one, and leaves the drill manual.
+    """
+    commands = [entry[5] for entry in cron_entries(text) if len(entry) == 6]
+    case.assertEqual(
+        sorted(commands),
+        ["/restic.sh backup", "/restic.sh check-freshness", "/restic.sh restore-test"],
+    )
+    for entry in cron_entries(text):
+        case.assertEqual(len(entry), 6, f"unparseable crontab line: {' '.join(entry)}")
+        # Minute zero collides with the deploy restart on every hour.
+        case.assertNotEqual(entry[0], "0", "a job must not run at minute zero")
+    hourly = {entry[0] for entry in cron_entries(text) if entry[2:5] == ["*", "*", "*"]}
+    case.assertEqual(len(hourly), 2, "backup and freshness must both be hourly")
+    case.assertEqual(
+        len({entry[0] for entry in cron_entries(text) if entry[5].endswith("backup")}), 1
+    )
+    drills = [entry for entry in cron_entries(text) if entry[5].endswith("restore-test")]
+    case.assertEqual(len(drills), 1, "the drill needs exactly one schedule")
+    case.assertEqual(drills[0][2:], ["1", "*", "*", "/restic.sh restore-test"])
 
 
 def assert_deploy_retries_only_transient_errors(case: unittest.TestCase, build: str) -> None:
@@ -595,6 +635,32 @@ class RecurringContractTest(unittest.TestCase):
                         "node server/server.js"):
             self.assertIn(command, service)
         self.assertIn('ENTRYPOINT ["/entrypoint.sh"]', runtime)
+
+    def test_restic_schedule_covers_backup_freshness_and_drill(self) -> None:
+        """`@hourly backup` alone never drills and hides a dead scheduler."""
+        text = CRONTAB.read_text(encoding="utf-8")
+        assert_backup_schedule_is_guarded(self, text)
+
+        # Mutation control: collapsing back to one `@hourly backup` is exactly
+        # the state this test was added for, and must fail.
+        collapsed = "# backup\n@hourly /restic.sh backup\n"
+        with self.assertRaises(AssertionError):
+            assert_backup_schedule_is_guarded(self, collapsed)
+
+        # Second control: keep all three duties but move the backup to minute
+        # zero, where a deploy restart takes the machine down mid-backup.
+        zero = text.replace("25 * * * * /restic.sh backup", "0 * * * * /restic.sh backup", 1)
+        self.assertNotEqual(zero, text)
+        with self.assertRaises(AssertionError):
+            assert_backup_schedule_is_guarded(self, zero)
+
+        # Third control: make the drill weekly. It still parses, but the
+        # "first of the month" promise in the README would be a lie.
+        weekly = text.replace("15 4 1 * * /restic.sh restore-test",
+                              "15 4 * * 1 /restic.sh restore-test", 1)
+        self.assertNotEqual(weekly, text)
+        with self.assertRaises(AssertionError):
+            assert_backup_schedule_is_guarded(self, weekly)
 
     def test_cleanup_keeps_running_and_cannot_race_a_publish(self) -> None:
         cleanup = workflow("ghcr-cleanup.yml")
