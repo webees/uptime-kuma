@@ -124,6 +124,24 @@ def workflow(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
 
 
+def assert_app_name_is_recorded(
+    case: unittest.TestCase, fly: str, readme: str, build: str
+) -> None:
+    """The Fly app name is one value, checked against every place that uses it."""
+    app = tomllib.loads(fly).get("app")
+    case.assertIsInstance(app, str)
+    case.assertRegex(app, r"^[a-z0-9][a-z0-9-]*$")
+    case.assertIn(f"fly apps create {app}", readme)
+    # The note is what stops the next rename from updating only one place.
+    case.assertIn("rename must be synced", fly)
+    # CI resolves the name from `fly.toml` and passes `-a` everywhere, so a
+    # stale local default cannot redirect the deploy or the verification.
+    case.assertIn('sed -n \'s/^app = "\\(.*\\)"$/\\1/p\' fly.toml', build)
+    case.assertIn('flyctl deploy -a "$app"', build)
+    case.assertIn('flyctl releases -a "$APP"', build)
+    case.assertIn('flyctl status -a "$APP"', build)
+
+
 IMAGE = "ghcr.io/example/uptime-kuma@sha256:" + "a" * 64
 
 
@@ -237,6 +255,27 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotIn("build", parsed)
         self.assertNotIn("image", parsed)
         self.assertIn('path = "/health"', fly)
+
+    def test_fly_app_name_matches_readme_and_rename_note(self) -> None:
+        """A wrong app name makes the deploy job fail before any image runs."""
+        fly = (ROOT / "fly.toml").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        build = workflow("ghcr.yaml")
+        assert_app_name_is_recorded(self, fly, readme, build)
+
+        # Mutation control: rename only the app in `fly.toml`; the README record
+        # and the rename note must then disagree with it.
+        renamed = fly.replace('app = "bxx-uptime-kuma"', 'app = "renamed-app"', 1)
+        self.assertNotEqual(renamed, fly)
+        with self.assertRaises(AssertionError):
+            assert_app_name_is_recorded(self, renamed, readme, build)
+
+        # Second mutation: drop the `-a` flag from the deploy invocation, so an
+        # implicit default app takes over again.
+        explicit = build.replace('flyctl deploy -a "$app"', "flyctl deploy", 1)
+        self.assertNotEqual(explicit, build)
+        with self.assertRaises(AssertionError):
+            assert_app_name_is_recorded(self, fly, readme, explicit)
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""

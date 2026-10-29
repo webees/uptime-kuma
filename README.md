@@ -52,7 +52,7 @@
 fly auth login
 
 # Create application
-fly apps create uptime-kuma
+fly apps create bxx-uptime-kuma
 
 # Import secrets from .env
 cat .env | fly secrets import

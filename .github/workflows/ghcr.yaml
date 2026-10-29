@@ -123,7 +123,12 @@ jobs:
           set -euo pipefail
           : "${FLY_API_TOKEN:?repository secret FLY_API_TOKEN is required}"
           : "${EXPECTED_IMAGE:?the built image digest is missing}"
-          flyctl deploy --image "$EXPECTED_IMAGE" --yes
+          # Name the app explicitly: `fly.toml` is authoritative, but a stale
+          # local default must never redirect the deploy to another app.
+          app="$(sed -n 's/^app = "\(.*\)"$/\1/p' fly.toml)"
+          test -n "$app"
+          echo "APP=$app" >> "$GITHUB_ENV"
+          flyctl deploy -a "$app" --image "$EXPECTED_IMAGE" --yes
 
       # A successful deploy is not readiness: verify the release, the digest on
       # every machine and the passing health check.
@@ -133,10 +138,11 @@ jobs:
           EXPECTED_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
         run: |
           set -euo pipefail
+          : "${APP:?the app name was not resolved}"
           deadline=$((SECONDS + 300))
           while :; do
-            if releases="$(timeout 30 flyctl releases --json)" &&
-              status="$(timeout 30 flyctl status --json)" &&
+            if releases="$(timeout 30 flyctl releases -a "$APP" --json)" &&
+              status="$(timeout 30 flyctl status -a "$APP" --json)" &&
               jq -e --arg image "$EXPECTED_IMAGE" '
                 ((if type == "array" then sort_by(.Version) | last else empty end) as $latest
                  | ($latest != null) and ($latest.ImageRef == $image)
