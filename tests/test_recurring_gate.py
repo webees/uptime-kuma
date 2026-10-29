@@ -160,6 +160,29 @@ def unpinned_uses(text: str) -> list[str]:
 def assert_actions_are_pinned(case: unittest.TestCase, workflows: dict[str, str]) -> None:
     for name, text in workflows.items():
         case.assertEqual(unpinned_uses(text), [], f"{name} has a mutable action reference")
+        case.assertEqual(
+            unlabelled_uses(text), [], f"{name} has a pinned action with no version comment"
+        )
+
+
+def unlabelled_uses(text: str) -> list[str]:
+    """A pin without its human version is unreadable and cannot be reviewed.
+
+    A bare 40-character hash hides which release is in use, so an auditor can
+    neither spot an outdated action nor confirm that a bump keeps the same
+    major. Every pin carries its tag as a trailing comment.
+    """
+    problems = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = re.match(r"\s*(?:-\s+)?uses:\s*(\S+)", line)
+        if not match:
+            continue
+        reference = match.group(1)
+        if reference.startswith("./"):
+            continue
+        if not re.search(r"@[0-9a-f]{40}\s+#\s*\S+", line):
+            problems.append(f"{number}: {reference}")
+    return problems
 
 
 def assert_digest_names_one_image_manifest(case: unittest.TestCase, build: str) -> None:
@@ -423,6 +446,18 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError) as caught:
             assert_actions_are_pinned(self, weakened)
         self.assertIn("actions/checkout@v4", str(caught.exception))
+
+        # Second control: keep the pin but delete its version comment. The SHA
+        # alone is still immutable, so only the readability rule can catch it.
+        unlabelled = {**workflows, name: workflows[name].replace(
+            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4",
+            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262", 1,
+        )}
+        self.assertNotEqual(unlabelled[name], workflows[name])
+        self.assertEqual(unpinned_uses(unlabelled[name]), [])
+        with self.assertRaises(AssertionError) as caught:
+            assert_actions_are_pinned(self, unlabelled)
+        self.assertIn("no version comment", str(caught.exception))
 
     def test_digest_cannot_resolve_to_an_attestation(self) -> None:
         build = workflow("ghcr.yaml")
