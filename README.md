@@ -100,6 +100,19 @@ machine runs that digest, and its health check is passing.
 `Validate` is a required status check on `main`; a commit that fails it cannot
 merge (see [Residual risk](#-residual-risk)).
 
+### CI Deploy Credential
+
+The publish workflow deploys the exact digest with a token scoped to one app.
+Create it and store it once; rotating it is the same command:
+
+```bash
+fly tokens create deploy -a bxx-uptime-kuma
+gh secret set FLY_API_TOKEN --repo webees/uptime-kuma
+```
+
+Keep the scope on `bxx-uptime-kuma`: a token minted for another app passes the
+`deploy` guard and then fails against the real one.
+
 ## 🛠️ Management & Operations
 
 ### Deployment CLI
@@ -175,15 +188,16 @@ fails when a class, a field, or a mutation control disappears.
 
 ## ⚠️ Residual risk
 
-- Branch protection on `main` requires the `validate` context and applies to
-  admins too (set through the API on 2026-10-29). The context has not yet been
-  observed on a real run, because no commit carrying `validate.yml` has reached
-  `main` yet; if the recorded check name differs, the rule must be renamed or
-  PRs block forever.
-- The image is only published and deployed from GitHub Actions; the first run of
-  the digest-based deploy job is unverified until it executes on `main`.
-- `FLY_API_TOKEN` is not set on the repository yet, so `deploy` fails at its
-  first guard until a deploy token scoped to `bxx-uptime-kuma` is stored.
+- The `validate` context is enforced on `main` for admins too and has been
+  observed gating real PRs, so a rename of the check needs the branch rule
+  renamed in the same commit.
+- The image is only published and deployed from GitHub Actions; a manual
+  `fly deploy` builds this Dockerfile and bypasses the digest gate.
+- `deploy` has no retry of its own. A Fly control-plane error fails the job and
+  needs a `gh run rerun --failed` (observed once: HTTP 503 fetching the
+  organization).
+- Nothing triggers a restore drill or a real backup on a schedule; both were
+  proven inside the image only.
 
 ## 📝 License
 
