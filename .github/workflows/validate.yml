@@ -1,0 +1,95 @@
+name: Validate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: {}
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: 📥 Checkout repository
+        # actions/checkout v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          # Validation never pushes, and the history scan needs every commit.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 🧹 Shell and Python checks
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          mapfile -d '' shell_files < <(find scripts -type f -name '*.sh' -print0)
+          test "${#shell_files[@]}" -gt 0
+          shellcheck "${shell_files[@]}"
+          # scripts/ currently has no Python; an unmatched glob would be fatal.
+          mapfile -d '' python_files < <(find scripts tests -type f -name '*.py' -print0)
+          test "${#python_files[@]}" -gt 0
+          python3 -m py_compile "${python_files[@]}"
+          python3 -m unittest discover -s tests -p 'test_*.py'
+
+      # Parse every workflow and fly.toml, so a YAML typo cannot reach main.
+      - name: 🧾 Workflow and fly.toml syntax
+        run: |
+          set -euo pipefail
+          files="$(find .github -type f \( -name '*.yml' -o -name '*.yaml' \) | sort)"
+          test -n "$files"
+          while IFS= read -r file; do
+            ruby -ryaml -e 'YAML.load_file(ARGV[0]); puts "ok #{ARGV[0]}"' "$file"
+          done <<< "$files"
+          python3 -c 'import tomllib; tomllib.load(open("fly.toml", "rb")); print("ok fly.toml")'
+
+      - name: 🔍 Lint GitHub Actions workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 --max-time 60 \
+            --output "$tmp/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$tmp/$archive" | sha256sum -c -
+          tar -xzf "$tmp/$archive" -C "$tmp" actionlint
+          "$tmp/actionlint" -no-color
+
+      # Every path proves the image: ghcr.yaml reuses this workflow and must
+      # never publish a commit whose runtime gates did not run.
+      - name: 🐳 Build and exercise the image
+        run: |
+          docker build --tag validate:local .
+          python3 tests/runtime_smoke.py validate:local
+          UPTIME_KUMA_IMAGE=validate:local python3 -m unittest tests.test_image_contracts -v
+
+      # An unset or blank allowlist must still adapt, in both shapes.
+      - name: 🧭 Caddy configuration
+        run: |
+          set -euo pipefail
+          for value in "" "status.example.org other.example.org"; do
+            docker run --rm --env "CADDY_DOMAINS=${value}" \
+              --entrypoint bash validate:local -c '
+                set -e
+                . /entrypoint/config.sh
+                audit_addresses
+                caddy validate --config /Caddyfile'
+          done
+          echo "Caddyfile adapts with and without an allowlist"
+

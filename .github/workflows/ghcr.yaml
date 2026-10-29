@@ -2,6 +2,11 @@ name: 🐳 Docker (Multi-Arch)
 
 on:
   workflow_dispatch: {}
+  # Weekly rebuild so base-image and OS-package security fixes ship without a
+  # code change. Scheduled runs use `main` HEAD and go through the same
+  # validate -> build -> deploy chain; only PR-only steps are skipped.
+  schedule:
+    - cron: '17 3 * * 1'
   push:
     branches:
       - main
@@ -11,9 +16,21 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+concurrency:
+  group: ghcr-registry
+  cancel-in-progress: false
+
 jobs:
+  # Nothing is published from a commit that failed its own gates.
+  validate:
+    uses: ./.github/workflows/validate.yml
+
   build:
-    runs-on: ubuntu-latest
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -21,21 +38,24 @@ jobs:
 
     steps:
       - name: 📥 Checkout repository
-        uses: actions/checkout@v4
+        # actions/checkout v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: ⚙️ Enable QEMU for cross-platform builds
-        uses: docker/setup-qemu-action@v3
+        # docker/setup-qemu-action v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
 
       - name: 🛠️ Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        # docker/setup-buildx-action v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
           driver: docker-container
-          install: true
           use: true
 
       - name: 🔐 Log into registry ${{ env.REGISTRY }}
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        # docker/login-action v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -43,10 +63,12 @@ jobs:
 
       - name: 🏷️ Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        # docker/metadata-action v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            type=raw,value=build-${{ github.run_id }}-${{ github.run_attempt }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=ref,event=branch
@@ -55,13 +77,115 @@ jobs:
 
       - name: 🚀 Build and push Docker image (Multi-Arch)
         id: build-and-push
-        uses: docker/build-push-action@v5
+        # docker/build-push-action v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
-          provenance: false
+          # Attestations ride along as extra index entries; the digest step
+          # below still selects the plain linux/amd64 image manifest.
+          provenance: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # A tag is mutable; the deployment must name the exact amd64 manifest.
+      - name: 🔖 Record the published amd64 digest
+        id: digest
+        if: github.event_name != 'pull_request'
+        env:
+          TAG: build-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          # Provenance adds attestation entries to the same index, so the
+          # platform filter is what keeps `--image` on a real image manifest:
+          # take the single linux/amd64 child and refuse anything else.
+          digest="$(docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${TAG}" \
+            --format '{{range .Manifest.Manifests}}{{if and (eq .Platform.Architecture "amd64") (eq .Platform.OS "linux")}}{{.Digest}}{{"\n"}}{{end}}{{end}}' \
+            | sed '/^$/d')"
+          [ "$(printf '%s\n' "$digest" | wc -l)" -eq 1 ]
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          echo "Published ${REGISTRY}/${IMAGE_NAME}:${TAG}@${digest}"
+
+      - name: 🚦 Smoke test the published digest
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: python3 tests/runtime_smoke.py "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # fly.toml carries no image, so the digest is the only source of truth.
+      - name: 📥 Checkout repository
+        # actions/checkout v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: 🛫 Set up Flyctl
+        # superfly/flyctl-actions/setup-flyctl 1.5
+        uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be
+
+      - name: 🚀 Deploy the exact digest
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          EXPECTED_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          : "${FLY_API_TOKEN:?repository secret FLY_API_TOKEN is required}"
+          : "${EXPECTED_IMAGE:?the built image digest is missing}"
+          # Name the app explicitly: `fly.toml` is authoritative, but a stale
+          # local default must never redirect the deploy to another app.
+          app="$(sed -n 's/^app = "\(.*\)"$/\1/p' fly.toml)"
+          test -n "$app"
+          echo "APP=$app" >> "$GITHUB_ENV"
+          flyctl deploy -a "$app" --image "$EXPECTED_IMAGE" --yes
+
+      # A successful deploy is not readiness: verify the release, the digest on
+      # every machine and the passing health check.
+      - name: ✅ Verify the deployment
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          EXPECTED_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          : "${APP:?the app name was not resolved}"
+          deadline=$((SECONDS + 300))
+          while :; do
+            if releases="$(timeout 30 flyctl releases -a "$APP" --json)" &&
+              status="$(timeout 30 flyctl status -a "$APP" --json)" &&
+              jq -e --arg image "$EXPECTED_IMAGE" '
+                ((if type == "array" then sort_by(.Version) | last else empty end) as $latest
+                 | ($latest != null) and ($latest.ImageRef == $image)
+                   and (($latest.Status // "" | ascii_downcase) == "complete"))
+              ' <<< "$releases" >/dev/null &&
+              jq -e --arg image "$EXPECTED_IMAGE" '
+                ((.Status // "" | ascii_downcase) == "deployed")
+                and ((.Machines | length) > 0)
+                and all(.Machines[];
+                  ((.state // "" | ascii_downcase) == "started")
+                  and ((.host_status // "" | ascii_downcase) == "ok")
+                  and (((.image_ref.registry // "") + "/"
+                        + (.image_ref.repository // "") + "@"
+                        + (.image_ref.digest // "")) == $image)
+                  and ((.checks | length) > 0)
+                  and all(.checks[]; ((.status // "" | ascii_downcase) == "passing")))
+              ' <<< "$status" >/dev/null
+            then
+              echo "deployment verified: ${EXPECTED_IMAGE}"
+              exit 0
+            fi
+            [ "$SECONDS" -ge "$deadline" ] && break
+            sleep 5
+          done
+          echo "::error::deployment verification failed" >&2
+          exit 1

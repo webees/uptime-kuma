@@ -1,17 +1,23 @@
-app = "uptime-kuma"
+# The real Fly application. CI deploys into whatever app is named here, so a
+# rename must be synced across this file, the README record and the deploy
+# token scope in the same commit; `tests/test_recurring_gate.py` pins the pair.
+app = "bxx-uptime-kuma"
 kill_signal = "SIGINT"
 kill_timeout = "10s"
 primary_region = "sin"
 swap_size_mb = 256
 
-[build]
-image = "ghcr.io/webees/uptime-kuma"
+# No `[build].image` on purpose: a mutable tag here is a second source of truth
+# that silently goes stale. The deploy workflow passes the exact amd64 digest
+# that validate passed; running `fly deploy` by hand builds this Dockerfile.
 
 [checks.health]
 grace_period = "1m0s"
 interval = "30s"
 method = "get"
-path = "/icon.svg"
+# Caddy answers this itself, so the probe survives a dead uptime-kuma and is
+# never subject to the CADDY_DOMAINS gate.
+path = "/health"
 port = 80
 timeout = "5s"
 type = "http"
