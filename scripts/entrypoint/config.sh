@@ -128,6 +128,10 @@ validate_smtp() {
         return 2
     fi
     [ -z "${SMTP_PORT:-}" ] && return 0
-    [[ "$SMTP_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$SMTP_PORT" -le 65535 ] \
-        || { echo "Error: SMTP_PORT must be 1-65535" >&2; return 2; }
+    # An explicit `if`: `A && B || C` also runs C when the first test passes
+    # and the second one fails for an unrelated reason, which reads as a bug.
+    if [[ ! "$SMTP_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || [ "$SMTP_PORT" -gt 65535 ]; then
+        echo "Error: SMTP_PORT must be 1-65535" >&2
+        return 2
+    fi
 }

@@ -224,19 +224,24 @@ line and an IP-shaped host silently never matched.
 Final decision: one DNS host rule and one HTTPS URL rule are shared by every
 call site, with an absolute path or unambiguous `s3://` rule for the restic
 target. SMTP values may not span lines. A username requires a password and a
-password a username. All of it runs at start-up and fails closed.
+password a username. `SMTP_PORT` is a whole number in 1-65535 with both ends of
+the range as boundary cases; the guard is an explicit `if` because
+`test && test || fail` is not if-then-else. All of it runs at start-up and fails
+closed.
 
 Authority: `scripts/entrypoint/config.sh:valid_dns_name`,
 `scripts/entrypoint/config.sh:validate_https_url`, and
 `scripts/entrypoint/config.sh:validate_smtp`.
 
 Mutation control: `tests/runtime_smoke.py:check_address_audit` (numeric host
-guard removed, `//` segment guard removed, SMTP pairing guard disabled).
+guard removed, `//` segment guard removed, SMTP pairing guard disabled, port
+upper bound removed).
 
 Regression gate: legal names, digit-bearing labels, IPv4 in dotted, short, and
 hex form, bracketed IPv6, userinfo, an empty S3 segment, a relative path, and a
 newline are all covered as accepted or rejected, as are a lone username, a lone
-password, and a complete credential pair.
+password, and a complete credential pair. Ports 1, 587, and 65535 are accepted;
+0 and 65536 are rejected; dropping the upper bound makes 65536 pass.
 
 ## Supply Chain And Public Surface
 

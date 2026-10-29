@@ -1184,6 +1184,10 @@ ADDRESS_GOOD = (
     ("RESTIC_REPOSITORY", "s3://s3.example/r2-bucket/uptime-kuma"),
     ("RESTIC_REPOSITORY", "s3://s3.example:9000/r2-bucket"),
     ("HEALTHCHECK_URL", "https://status.example/api/push/abc"),
+    # The port guard has both ends of its legal range as boundary cases.
+    ("SMTP_PORT", "1"),
+    ("SMTP_PORT", "587"),
+    ("SMTP_PORT", "65535"),
 )
 
 ADDRESS_BAD = (
@@ -1199,6 +1203,8 @@ ADDRESS_BAD = (
     ("RESTIC_REPOSITORY", "repo/relative"),
     ("HEALTHCHECK_URL", "http://status.example"),
     ("HEALTHCHECK_URL", "https://status.example/" + "a" * 2048),
+    ("SMTP_PORT", "0"),
+    ("SMTP_PORT", "65536"),
 )
 
 
@@ -1280,6 +1286,21 @@ def check_address_audit(image: str) -> None:
         expect_pass(suite, control, "C7 empty-segment mutation runs", "C7 empty-segment mutation failed")
         suite.same(
             "C7 mutation: without the empty-segment guard `//` is accepted",
+            "@ rc=0",
+            probes(control)[0],
+        )
+
+    with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
+        port = mutate(
+            "scripts/entrypoint/config.sh",
+            (('if [[ ! "$SMTP_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || [ "$SMTP_PORT" -gt 65535 ]; then',
+              'if [[ ! "$SMTP_PORT" =~ ^[1-9][0-9]{0,4}$ ]]; then'),),
+            Path(tmp),
+        )
+        control = case(image, audit, env={"SMTP_PORT": "65536"}, source=port)
+        expect_pass(suite, control, "C7 port-bound mutation runs", "C7 port-bound mutation failed")
+        suite.same(
+            "C7 mutation: without the upper bound port 65536 is accepted",
             "@ rc=0",
             probes(control)[0],
         )
