@@ -275,6 +275,12 @@ therefore also runs on every `main` push, shares the publish concurrency group
 so it queues instead of deleting a `build-<run>-<attempt>` tag mid-verify, and
 keeps a window long enough for a stalled review plus `keep-n-tagged` as a floor.
 
+The listener port is part of the same surface: the container runs Caddy as the
+unprivileged `node` user, and a Fly machine refuses `bind :80` with EACCES while
+local Docker Desktop allows it. Every local gate therefore stayed green and the
+first real deploy timed out on a crash loop. The listener, `internal_port` and
+the health-check port are one unprivileged value (8080).
+
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
 `.github/workflows/ghcr.yaml:digest`.
@@ -303,6 +309,9 @@ the publish concurrency group with `cancel-in-progress: false`, and hold an
 `older-than` window of at least 7 days plus a `keep-n-tagged` floor. Dropping
 the push trigger, giving cleanup its own group, or tightening the window to a
 day each fails with its own mutation control.
+The Caddyfile listener must be above 1024 and equal to both
+`http_service.internal_port` and `checks.health.port`; moving the listener back
+to 80, or drifting `internal_port` away from it, each fails on its own control.
 `validate.yml` is both a `workflow_call` target and a standalone workflow, so
 its concurrency group must include the workflow name: keyed only on the ref,
 the nested copy and its standalone twin share a group under
