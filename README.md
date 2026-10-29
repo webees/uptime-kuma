@@ -5,7 +5,7 @@
 [![Uptime Kuma](https://img.shields.io/badge/Uptime%20Kuma-Latest-green?style=for-the-badge)](https://github.com/louislam/uptime-kuma)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
-> Production-ready Uptime Kuma on Fly.io with Caddy reverse proxy, Overmind process manager, and automated Restic backups to Cloudflare R2.
+> Uptime Kuma on Fly.io with a Caddy host gate, a small process supervisor, and checked Restic backups to Cloudflare R2.
 
 ## ✨ Features
 
@@ -13,7 +13,7 @@
 | :--- | :--- |
 | **Uptime Kuma** | Self-hosted monitoring tool |
 | **Caddy** | Reverse proxy with security headers and IP forwarding |
-| **Overmind** | Process manager for robust service orchestration |
+| **Supervisor** | Restarts the proxy and scheduler, hands app exits back to Fly |
 | **Supercronic** | Cron daemon for automated tasks |
 | **Restic** | Encrypted incremental backups to S3/R2 |
 | **msmtp** | Email notifications for system alerts |
@@ -27,7 +27,7 @@
                             │ :443
 ┌───────────────────────────▼─────────────────────────────┐
 │                        Caddy                            │
-│              (TLS termination, headers)                 │
+│         (/health, host gate, security headers)          │
 └───────────────────────────┬─────────────────────────────┘
                             │ :3001
 ┌───────────────────────────▼─────────────────────────────┐
@@ -69,7 +69,7 @@ fly secrets set CADDY_DOMAINS="status.example.com"
 
 # Restic / S3 backup settings
 fly secrets set RESTIC_PASSWORD="your-secure-password"
-fly secrets set RESTIC_REPOSITORY="s3:your-account-id.r2.cloudflarestorage.com/uptime-kuma"
+fly secrets set RESTIC_REPOSITORY="s3://your-account-id.r2.cloudflarestorage.com/uptime-kuma"
 fly secrets set AWS_ACCESS_KEY_ID="your-r2-id"
 fly secrets set AWS_SECRET_ACCESS_KEY="your-r2-key"
 
@@ -85,8 +85,19 @@ fly secrets set SMTP_PASSWORD="app-specific-password"
 ### 3. Deploy
 
 ```bash
+# fly.toml has no image: build locally, or pass the published digest.
 fly deploy
+
+# What CI does: deploy an exact amd64 manifest built from a validated commit.
+fly deploy --image ghcr.io/webees/uptime-kuma@sha256:<digest>
 ```
+
+`ghcr.yaml` runs `validate` first, pushes a `build-<run>-<attempt>` tag, records
+the amd64 manifest digest, smoke-tests that digest, and only then deploys it.
+Deployment verification fails unless the latest release is complete, every
+machine runs that digest, and its health check is passing.
+
+Make `Validate` a required status check on `main` (see [Residual risk](#-residual-risk)).
 
 ## 🛠️ Management & Operations
 
@@ -104,9 +115,15 @@ fly apps restart               # Restart all instances
 ```bash
 /restic.sh backup              # Run manual backup
 /restic.sh snapshots           # List all snapshots
-/restic.sh restore <id>        # Restore from specific snapshot
+/restic.sh restore-test        # Drill the latest snapshot into /tmp
+RESTORE_CONFIRM=yes /restic.sh restore <id>   # Replace the live database
 /restic.sh test                # Test email notifications
 ```
+
+Restore drills never touch `/app/data`. In-place restore stages the snapshot,
+verifies it, copies the current database to `kuma.db.previous`, swaps, then
+requires an application restart. Keep that rollback copy until the instance is
+confirmed healthy.
 
 ### Log Inspection
 
@@ -124,6 +141,40 @@ The Caddy configuration automatically applies the following security posture:
 - **XSS Protection**: `X-XSS-Protection 1; mode=block`
 - **Privacy**: `Referrer-Policy strict-origin-when-cross-origin`
 - **Indexing**: `X-Robots-Tag noindex, nofollow`
+
+`/health` is answered by Caddy itself and is never subject to
+`CADDY_DOMAINS`, so the Fly probe survives a dead application. Every other
+request is matched against the allowlist and answers 403 (with the full header
+set) when it is not listed.
+
+Client IPs come from `CF-Connecting-IP`, then `Fly-Client-IP`, then the peer
+address, and are forwarded as a single-hop `X-Real-IP`/`X-Forwarded-For`.
+
+Base image and the downloaded scheduler are pinned by digest/sha256. `.env`
+holds placeholders only; real values live in `fly secrets`.
+
+## 🧪 Validation
+
+```bash
+shellcheck scripts/*.sh scripts/entrypoint/*.sh
+python3 -m unittest discover -s tests -p 'test_*.py'
+docker build --tag uptime-kuma:local .
+python3 tests/runtime_smoke.py uptime-kuma:local
+```
+
+`docs/recurring_issues.md` records the invariants that regressed more than once.
+Every round starts from its target-mode matrix; `tests/test_recurring_gate.py`
+fails when a class, a field, or a mutation control disappears.
+
+## ⚠️ Residual risk
+
+- `Validate` as a *required* status check on `main` is a repository setting, not
+  a file. Until it is switched on, `ghcr.yaml` runs the same gates but a direct
+  merge can still bypass them.
+- The image is only published and deployed from GitHub Actions; the first run of
+  the digest-based deploy job is unverified until it executes on `main`.
+- Weekly rebuilds are not scheduled, so base-image security fixes need a manual
+  run until a cron entry is added.
 
 ## 📝 License
 

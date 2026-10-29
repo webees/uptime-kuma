@@ -1,0 +1,12 @@
+.git
+.github
+.gitignore
+.env
+.DS_Store
+**/__pycache__
+**/*.pyc
+**/*.log
+fly.toml
+README.md
+docs
+tests
