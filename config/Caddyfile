@@ -11,6 +11,9 @@
 	# Trust Fly.io private networking for accurate IP parsing
 	servers {
 		trusted_proxies static private_ranges
+		# Cloudflare first, then Fly's own edge header. Caddy only reads these
+		# from a trusted peer, so a client-supplied copy is not believed.
+		client_ip_headers CF-Connecting-IP Fly-Client-IP
 	}
 
 	log {
@@ -52,7 +55,7 @@
 
 	# Proxy to the application backend
 	reverse_proxy localhost:3001 {
-		header_up X-Real-IP {http.request.header.Fly-Client-IP}
-		header_up X-Forwarded-For {http.request.header.Fly-Client-IP}
+		header_up X-Real-IP {client_ip}
+		header_up X-Forwarded-For {client_ip}
 	}
 }

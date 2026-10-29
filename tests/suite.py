@@ -110,7 +110,11 @@ def case(
     proves that a guard is actually live.
     """
     source = source or SCRIPTS
-    body = "cp /src/restic.sh /restic.sh && chmod +x /restic.sh\n" + "\n".join(
+    # Mirror the Dockerfile layout: scripts/ and config/ land in /.
+    body = (
+        "cp /src/scripts/* / 2>/dev/null; cp /src/config/* / 2>/dev/null;"
+        " chmod +x /restic.sh 2>/dev/null; true\n"
+    ) + "\n".join(
         (
             f"printf '%s\\n' '{STARTED}'",
             "status=0",
@@ -163,17 +167,19 @@ def expect_red(suite: Suite, result: Case, success: str, failure: str) -> None:
     expect(suite, False, result, success, failure)
 
 
-def mutate(script: Path, replacements: tuple[tuple[str, str], ...], into: Path) -> Path:
-    """Copy ``scripts/`` next to a deliberately weakened ``script``."""
+def mutate(relative: str, replacements: tuple[tuple[str, str], ...], into: Path) -> Path:
+    """Copy ``scripts/`` and ``config/`` with a deliberately weakened file."""
     target = into / "src"
-    target.mkdir(parents=True, exist_ok=True)
-    for item in SCRIPTS.iterdir():
-        if item.is_file():
-            (target / item.name).write_bytes(item.read_bytes())
-    text = (target / script.name).read_text(encoding="utf-8")
+    for name in ("scripts", "config"):
+        (target / name).mkdir(parents=True, exist_ok=True)
+        for item in (REPO_ROOT / name).iterdir():
+            if item.is_file():
+                (target / name / item.name).write_bytes(item.read_bytes())
+    path = target / relative
+    text = path.read_text(encoding="utf-8")
     for old, new in replacements:
         if old not in text:
-            raise SystemExit(f"mutation anchor missing in {script.name}: {old!r}")
+            raise SystemExit(f"mutation anchor missing in {relative}: {old!r}")
         text = text.replace(old, new, 1)
-    (target / script.name).write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
     return target
