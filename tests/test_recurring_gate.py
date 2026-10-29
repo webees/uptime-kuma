@@ -161,10 +161,10 @@ def unpinned_uses(text: str) -> list[str]:
 
 def assert_actions_are_pinned(case: unittest.TestCase, workflows: dict[str, str]) -> None:
     for name, text in workflows.items():
-        case.assertEqual(unpinned_uses(text), [], f"{name} has a mutable action reference")
-        case.assertEqual(
-            unlabelled_uses(text), [], f"{name} has a pinned action with no version comment"
-        )
+        for problem in unpinned_uses(text):
+            case.fail(f"{name}:{problem} is a mutable action reference")
+        for problem in unlabelled_uses(text):
+            case.fail(f"{name}:{problem} is pinned but carries no version comment")
 
 
 def unlabelled_uses(text: str) -> list[str]:
