@@ -177,7 +177,9 @@ a failing log write all fail closed inside their cap.
 
 History: never established before this round. `restic unlock ... || true` hid a
 stale lock, `@hourly` could overlap itself, and `overmind` restarted a dead
-application while leaving a dead proxy dead.
+application while leaving a dead proxy dead. Nothing watched the age of
+`last_success` either: a schedule that stopped firing, a rotated marker, or a
+clock jump left a green status file next to a backup that was days old.
 
 Final decision: one `flock` decides concurrency and only the holder publishes
 `running`; a skipped run exits 3 without touching the marker. Missing,
@@ -186,19 +188,31 @@ distinct and none of them blocks the next run. Status writes rename a sibling
 temp file, so a failure keeps the previous marker. One supervisor owns the
 process table: Caddy and the scheduler restart after a validated positive
 delay, and an application exit stops the container so Fly recovers the machine.
+A missing `flock`, a rotated marker, or a clock jump must not silently age the
+last success: every run derives the age from `last_success` and warns plus mails
+once the age reaches `RESTIC_STALE_HOURS` (default 26, bounded to 8760). The age
+is derived state rather than another marker, so one success clears it, a first
+run with no history stays quiet, and a backwards clock never warns.
 
 Authority: `scripts/restic.sh:write_status` and `scripts/services.sh:supervise`.
+Staleness lives in `scripts/restic.sh:stale_backup`, called once from `main`
+after `load_status` and `initCfg` (so the mailer is configured); its window is
+bounded by `require_bounded_int`.
 
 Mutation control: `tests/runtime_smoke.py:check_lock_and_state` (in-place status
-write) and `tests/runtime_smoke.py:check_process_supervision` (restartable
-application, non-restartable proxy).
+write, stale call removed) and `tests/runtime_smoke.py:check_process_supervision`
+(restartable application, non-restartable proxy).
 
 Regression gate: a held lock skips, an unusable status path fails closed, a stale
 running marker, an unknown state, an oversized marker, and a symlinked marker all
 recover, a failed rename keeps the old marker, a forced Caddy or scheduler exit
 returns with a new pid and a logged backoff, the proxy serves again, an
 application exit stops the container, and a zero or malformed delay fails closed
-before any service starts.
+before any service starts. The stale window has its own cases: 30h warns and
+mails, exactly 26h warns, one second under stays quiet, no history stays quiet,
+and `0`, a fractional value, and an over-limit value fail with exit 2 naming the
+variable. Removing the call leaves a stale backup silent while the run still
+succeeds.
 
 ## Address And Secret Input Audit
 

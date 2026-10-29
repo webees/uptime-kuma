@@ -25,6 +25,8 @@ LIMIT_LOG_BYTES=8388608
 LIMIT_LOG_DIR_BYTES=67108864
 LIMIT_QUICK_TIMEOUT=3600
 LIMIT_LONG_TIMEOUT=86400
+STALE_HOURS="${RESTIC_STALE_HOURS:-26}"
+LIMIT_STALE_HOURS=8760
 LAST_SUCCESS=0
 CURRENT_STEP=""
 
@@ -169,6 +171,22 @@ load_status() {
     else
         LAST_SUCCESS=$((10#$LAST_SUCCESS))
     fi
+}
+
+# A run can succeed forever while the backup age silently grows (a skipped
+# schedule, a rotated status file, a clock jump). The age is derived from the
+# state, so no extra marker is needed: every run while stale warns and mails,
+# and one fresh success clears it.
+stale_backup() {
+    local now age
+    # No history yet (first ever run) is not stale.
+    [ "${LAST_SUCCESS:-0}" -eq 0 ] && return 0
+    now="$(date -u +%s)"
+    [ "${now:-0}" -ge "$LAST_SUCCESS" ] || return 0
+    age=$((now - LAST_SUCCESS))
+    [ "$age" -ge $((STALE_HOURS * 3600)) ] || return 0
+    echo "Warning: the last successful backup is older than ${STALE_HOURS}h" >&2
+    mail "Backup is stale" || :
 }
 
 # Send email notification
@@ -375,6 +393,7 @@ main() {
     require_bounded_int RESTIC_LOG_DIR_MAX_BYTES "$MAX_LOG_DIR_BYTES" "$LIMIT_LOG_DIR_BYTES" || exit 2
     require_bounded_int RESTIC_QUICK_TIMEOUT "$QUICK_TIMEOUT" "$LIMIT_QUICK_TIMEOUT" || exit 2
     require_bounded_int RESTIC_LONG_TIMEOUT "$LONG_TIMEOUT" "$LIMIT_LONG_TIMEOUT" || exit 2
+    require_bounded_int RESTIC_STALE_HOURS "$STALE_HOURS" "$LIMIT_STALE_HOURS" || exit 2
 
     mkdir -p "$LOG_DIR" || { echo "Error: cannot create ${LOG_DIR}" >&2; exit 2; }
     # Refuse new work when the log directory cannot be kept bounded.
@@ -399,6 +418,8 @@ main() {
         write_status failed "${CURRENT_STEP:-Task failed} (exit ${rc})" || :
     fi' EXIT
     initCfg
+    # After initCfg so the mailer has its configuration when this warns.
+    stale_backup
 
     case "$command" in
         backup)      backup ;;

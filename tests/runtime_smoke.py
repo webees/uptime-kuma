@@ -129,9 +129,20 @@ def stop(container: str) -> None:
         containers.remove(container)
 
 
-def run(image: str, script: str, root: str, source: Path | None = None) -> Case:
+def run(
+    image: str,
+    script: str,
+    root: str,
+    source: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> Case:
     return case(
-        image, script, env=RESTIC_ENV, binds=(f"{root}:/w",), prepare=PREPARE, source=source
+        image,
+        script,
+        env={**RESTIC_ENV, **(env or {})},
+        binds=(f"{root}:/w",),
+        prepare=PREPARE,
+        source=source,
     )
 
 
@@ -858,6 +869,96 @@ def check_lock_and_state(image: str) -> None:
         ["@ rc=0", "@ regular=yes", "@ state=ok"],
         probes(result),
     )
+
+    # Staleness is derived from the recorded success time, so the clock is
+    # pinned instead of racing a real 26h boundary. The mailer is a stub: the
+    # alert path is what is being asserted, not msmtp.
+    def stale_case(last_success: str, hours: str | None = None, source: Path | None = None) -> Case:
+        root = workspace()
+        env = {"FIXED_NOW": "1790000000", "SMTP_TO": "admin@example"}
+        if hours is not None:
+            env["RESTIC_STALE_HOURS"] = hours
+        return run(
+            image,
+            "mkdir -p /w/bin\n"
+            "printf '%s\\n' '#!/bin/bash'"
+            " 'if [ \"$1\" = -u ] && [ \"$2\" = +%s ]; then echo \"$FIXED_NOW\"; exit 0; fi'"
+            " 'exec /usr/bin/date \"$@\"' > /w/bin/date\n"
+            "printf '%s\\n' '#!/bin/bash' 'echo \"$*\" >> /w/mail.calls' > /w/bin/mail\n"
+            "printf '%s\\n' '#!/bin/bash' 'exit 0' > /w/bin/restic\n"
+            "chmod +x /w/bin/date /w/bin/mail /w/bin/restic\n"
+            f"printf 'state=ok\\nupdated_at=1\\nlast_success={last_success}\\nmessage=old\\n'"
+            " > /w/data/backup-status.txt\n"
+            "rc=0; PATH=\"/w/bin:$PATH\" /restic.sh snapshots 2>/w/stderr || rc=$?\n"
+            "cat /w/stderr >&2\n"
+            "printf '@ rc=%s\\n' \"$rc\"\n"
+            "printf '@ warn=%s\\n' \"$(grep -c 'older than' /w/stderr || true)\"\n"
+            "mails=0; [ ! -f /w/mail.calls ] || mails=\"$(grep -c 'Backup is stale' /w/mail.calls)\"\n"
+            "printf '@ stale_mails=%s\\n' \"$mails\"\n",
+            root,
+            env=env,
+            source=source,
+        )
+
+    now = 1790000000
+    # 30h old with the default 26h window: the run warns and mails.
+    result = stale_case(str(now - 30 * 3600))
+    expect_pass(suite, result, "C6 a stale backup case runs", "C6 stale backup case failed")
+    suite.same(
+        "C6 a stale backup warns and mails",
+        ["@ rc=0", "@ warn=1", "@ stale_mails=1"],
+        probes(result),
+    )
+
+    # Exactly at the threshold is stale; one second below is not.
+    result = stale_case(str(now - 26 * 3600))
+    expect_pass(suite, result, "C6 exact threshold case runs", "C6 exact threshold case failed")
+    suite.same(
+        "C6 exactly the window still warns",
+        ["@ rc=0", "@ warn=1", "@ stale_mails=1"],
+        probes(result),
+    )
+
+    result = stale_case(str(now - (26 * 3600 - 1)))
+    expect_pass(suite, result, "C6 just inside the window runs", "C6 just inside the window failed")
+    suite.same(
+        "C6 one second under the window stays quiet",
+        ["@ rc=0", "@ warn=0", "@ stale_mails=0"],
+        probes(result),
+    )
+
+    # A first ever run has no history to age, so it is never stale.
+    result = stale_case("0")
+    expect_pass(suite, result, "C6 no-history case runs", "C6 no-history case failed")
+    suite.same(
+        "C6 an absent history does not warn",
+        ["@ rc=0", "@ warn=0", "@ stale_mails=0"],
+        probes(result),
+    )
+
+    for value in ("0", "1.5", "8761"):
+        result = stale_case(str(now - 30 * 3600), value)
+        expect_pass(suite, result, f"C6 RESTIC_STALE_HOURS={value} rejected",
+                    f"C6 RESTIC_STALE_HOURS={value} accepted")
+        suite.same(f"C6 RESTIC_STALE_HOURS={value} fails with 2", "@ rc=2", probes(result)[0])
+        suite.same(f"C6 RESTIC_STALE_HOURS={value} names itself", True,
+                   "RESTIC_STALE_HOURS must be" in result.output)
+
+    # Removing the call in `main` is the whole guard: the state is still read,
+    # the run still succeeds, only the alert disappears.
+    with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
+        unwatched = mutate(
+            RESTIC,
+            (("    # After initCfg so the mailer has its configuration when this warns.\n    stale_backup\n", ""),),
+            Path(tmp),
+        )
+        control = stale_case(str(now - 30 * 3600), source=unwatched)
+        expect_pass(suite, control, "C6 stale mutation control runs", "C6 stale mutation control failed")
+        suite.same(
+            "C6 mutation: without the call a stale backup is silent",
+            ["@ rc=0", "@ warn=0", "@ stale_mails=0"],
+            probes(control),
+        )
 
     with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
         unlocked = mutate(RESTIC, (("    if ! flock -n 9; then\n", "    if false; then\n"),), Path(tmp))

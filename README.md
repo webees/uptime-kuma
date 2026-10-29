@@ -126,6 +126,12 @@ verifies it, copies the current database to `kuma.db.previous`, swaps, then
 requires an application restart. Keep that rollback copy until the instance is
 confirmed healthy.
 
+Every run also compares the recorded `last_success` against the wall clock. When
+the last good backup is older than `RESTIC_STALE_HOURS` (default `26`, at most
+`8760`), the run still proceeds but warns on stderr and mails
+`Backup is stale` to `SMTP_TO`. A first run with no history never warns, and a
+single success clears the alert.
+
 ### Log Inspection
 
 ```bash
@@ -176,8 +182,8 @@ fails when a class, a field, or a mutation control disappears.
   PRs block forever.
 - The image is only published and deployed from GitHub Actions; the first run of
   the digest-based deploy job is unverified until it executes on `main`.
-- Weekly rebuilds are not scheduled, so base-image security fixes need a manual
-  run until a cron entry is added.
+- `FLY_API_TOKEN` is not set on the repository yet, so `deploy` fails at its
+  first guard until a deploy token scoped to `bxx-uptime-kuma` is stored.
 
 ## 📝 License
 
