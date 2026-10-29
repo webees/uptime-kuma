@@ -117,6 +117,16 @@ validate_smtp() {
             *$'\n'* | *$'\r'*) echo "Error: ${name} must be a single line" >&2; return 2 ;;
         esac
     done
+    # msmtprc always carries a `user` and a `password` line, so half a pair
+    # would authenticate with an empty field.
+    if [ -n "${SMTP_USERNAME:-}" ] && [ -z "${SMTP_PASSWORD:-}" ]; then
+        echo "Error: SMTP_USERNAME requires SMTP_PASSWORD" >&2
+        return 2
+    fi
+    if [ -z "${SMTP_USERNAME:-}" ] && [ -n "${SMTP_PASSWORD:-}" ]; then
+        echo "Error: SMTP_PASSWORD requires SMTP_USERNAME" >&2
+        return 2
+    fi
     [ -z "${SMTP_PORT:-}" ] && return 0
     [[ "$SMTP_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$SMTP_PORT" -le 65535 ] \
         || { echo "Error: SMTP_PORT must be 1-65535" >&2; return 2; }

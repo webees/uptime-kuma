@@ -1124,6 +1124,36 @@ def check_address_audit(image: str) -> None:
         probes(result)[0] if probes(result) else "",
     )
 
+    # `initCfg` always emits a `user` and a `password` line, so half a pair
+    # must be refused instead of silently authenticating with an empty field.
+    for label, env in (
+        ("C7 a username without a password is rejected", {"SMTP_USERNAME": "user"}),
+        ("C7 a password without a username is rejected", {"SMTP_PASSWORD": "secret"}),
+    ):
+        result = case(image, audit, env=env)
+        expect_pass(suite, result, f"{label} case runs", f"{label} case failed")
+        suite.same(label, "@ rc=2", probes(result)[0] if probes(result) else "")
+
+    paired = case(
+        image, audit, env={"SMTP_HOST": "smtp.example", "SMTP_USERNAME": "user", "SMTP_PASSWORD": "secret"}
+    )
+    expect_pass(suite, paired, "C7 a complete credential pair case runs", "C7 credential pair case failed")
+    suite.same("C7 a complete credential pair is accepted", "@ rc=0", probes(paired)[0] if probes(paired) else "")
+
+    with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
+        unpaired = mutate(
+            "scripts/entrypoint/config.sh",
+            (('    if [ -n "${SMTP_USERNAME:-}" ] && [ -z "${SMTP_PASSWORD:-}" ]; then\n', "    if false; then\n"),),
+            Path(tmp),
+        )
+        control = case(image, audit, env={"SMTP_USERNAME": "user"}, source=unpaired)
+        expect_pass(suite, control, "C7 pairing mutation runs", "C7 pairing mutation failed")
+        suite.same(
+            "C7 mutation: without the pairing guard a lone username is accepted",
+            "@ rc=0",
+            probes(control)[0],
+        )
+
     with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
         numeric = mutate(
             "scripts/entrypoint/config.sh",

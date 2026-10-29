@@ -217,11 +217,12 @@ Authority: `scripts/entrypoint/config.sh:valid_dns_name`,
 `scripts/entrypoint/config.sh:validate_smtp`.
 
 Mutation control: `tests/runtime_smoke.py:check_address_audit` (numeric host
-guard removed, `//` segment guard removed).
+guard removed, `//` segment guard removed, SMTP pairing guard disabled).
 
 Regression gate: legal names, digit-bearing labels, IPv4 in dotted, short, and
 hex form, bracketed IPv6, userinfo, an empty S3 segment, a relative path, and a
-newline are all covered as accepted or rejected.
+newline are all covered as accepted or rejected, as are a lone username, a lone
+password, and a complete credential pair.
 
 ## Supply Chain And Public Surface
 
