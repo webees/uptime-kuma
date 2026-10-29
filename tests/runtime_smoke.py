@@ -538,6 +538,27 @@ def check_restore_isolation(image: str) -> None:
     suite.same("C4 symlinked live database is refused", True, "rc=2" in result.output)
     suite.same("C4 refusal names the reason", True, "not a regular file" in result.output)
 
+    # Not just symlinks: a directory standing in for the database must be
+    # refused as well, before anything is written over it.
+    root = workspace()
+    result = run(
+        image,
+        "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+        "/restic.sh backup >/dev/null 2>&1 || exit 1\n"
+        "id=$(restic snapshots --json 2>/dev/null | sed -E 's/.*\"short_id\":\"([^\"]+)\".*/\\1/' | head -n 1)\n"
+        "rm -f /w/data/kuma.db; mkdir /w/data/kuma.db; : > /w/data/kuma.db/keep\n"
+        "RESTORE_CONFIRM=yes /restic.sh restore \"$id\" 2>&1; echo \"rc=$?\"\n"
+        "printf '@ still_dir=%s\\n' \"$(test -d /w/data/kuma.db && echo yes || echo no)\"\n"
+        "printf '@ keep=%s\\n' \"$(test -f /w/data/kuma.db/keep && echo yes || echo no)\"\n",
+        root,
+    )
+    expect_pass(suite, result, "C4 directory case completes", "C4 directory case failed")
+    suite.same(
+        "C4 a non-regular live database is refused untouched",
+        ["@ still_dir=yes", "@ keep=yes"],
+        probes(result),
+    )
+
     with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
         retargeted = mutate(
             RESTIC,
