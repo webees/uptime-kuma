@@ -1,7 +1,8 @@
 #!/bin/bash
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║ Restic Backup Script                                                      ║
-# ║ Usage: /restic.sh {backup|restore <id>|snapshots|test}                    ║
+# ║ Usage: /restic.sh {backup|restore <id>|restore-test|snapshots|            ║
+# ║                    check-freshness|test}                                  ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
 set -uo pipefail
@@ -187,6 +188,32 @@ stale_backup() {
     [ "$age" -ge $((STALE_HOURS * 3600)) ] || return 0
     echo "Warning: the last successful backup is older than ${STALE_HOURS}h" >&2
     mail "Backup is stale" || :
+}
+
+# The advisory above only fires when something else runs, so a dead scheduler
+# stays silent by definition. `check-freshness` is its own scheduled gate: it
+# exits non-zero once the last success is too old, which the EXIT trap records
+# and which makes the missing hour visible. It never stamps `last_success`, so
+# a passing check cannot launder a stale backup into a fresh one.
+check_freshness() {
+    local now age limit=$((STALE_HOURS * 3600))
+    if [ "${LAST_SUCCESS:-0}" -eq 0 ]; then
+        echo "No successful backup recorded yet"
+        return 0
+    fi
+    now="$(date -u +%s)"
+    if [ "${now:-0}" -lt "$LAST_SUCCESS" ]; then
+        echo "Warning: last_success is in the future; the clock is behind" >&2
+        return 0
+    fi
+    age=$((now - LAST_SUCCESS))
+    if [ "$age" -lt "$limit" ]; then
+        echo "Last successful backup was ${age}s ago (limit ${limit}s)"
+        return 0
+    fi
+    echo "Error: no successful backup for ${age}s (limit ${limit}s)" >&2
+    mail "Backup is stale (${age}s)" || :
+    return 1
 }
 
 # Send email notification
@@ -418,21 +445,23 @@ main() {
         write_status failed "${CURRENT_STEP:-Task failed} (exit ${rc})" || :
     fi' EXIT
     initCfg
-    # After initCfg so the mailer has its configuration when this warns.
-    stale_backup
+    # After initCfg so the mailer has its configuration when this warns. The
+    # freshness gate mails on its own, so the advisory would only duplicate.
+    [ "$command" = check-freshness ] || stale_backup
 
     case "$command" in
         backup)      backup ;;
         restore)     restore "${2:-}" ;;
         restore-test) restore_test ;;
         snapshots)   restic snapshots ;;
+        check-freshness) check_freshness || exit 2 ;;
         test)
             echo "Test email from $APP_NAME backup system." \
                 | command mail -s "[$APP_NAME] Test Mail" "$SMTP_TO" \
                 && echo "Test mail sent to $SMTP_TO"
             ;;
         *)
-            echo "Usage: $0 {backup|restore <id>|restore-test|snapshots|test}" >&2
+            echo "Usage: $0 {backup|restore <id>|restore-test|snapshots|check-freshness|test}" >&2
             exit 1
             ;;
     esac
