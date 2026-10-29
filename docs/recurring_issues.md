@@ -302,6 +302,13 @@ stayed healthy), so
 `tests/test_recurring_gate.py:test_deploy_retries_only_transient_errors` pins a
 bounded, digest-idempotent retry with a growing delay, a transient-only filter
 and a fail-closed last attempt.
+The retry only covers the step it lives in, so the toolchain must not depend on
+the same service: the setup action resolved `latest` through a Fly-hosted
+manifest and died there with 503 before any retry ran (run `40959357266`).
+`tests/test_recurring_gate.py:test_flyctl_is_pinned_and_not_fetched_through_fly`
+therefore installs the version-pinned GitHub release asset, verifies its sha256
+and asserts the action is gone; a control re-inserts it, and another drifts the
+asset name away from the pinned version.
 
 Regression gate: the digest check rejects a mutable image, a tampered binary
 fails the build, the deploy job needs `build` which needs `validate`, the

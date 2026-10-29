@@ -195,7 +195,9 @@ fails when a class, a field, or a mutation control disappears.
   `fly deploy` builds this Dockerfile and bypasses the digest gate.
 - `deploy` retries only transient Fly 5xx up to three attempts with backoff.
   A longer control-plane outage still fails the job and needs
-  `gh run rerun --failed` (observed twice: `status 503`).
+  `gh run rerun --failed` (observed twice: `status 503`). The Fly CLI is
+  installed from a sha256-pinned GitHub release, because the setup action
+  resolved `latest` through Fly itself and failed there first.
 - Nothing triggers a restore drill or a real backup on a schedule; both were
   proven inside the image only.
 
