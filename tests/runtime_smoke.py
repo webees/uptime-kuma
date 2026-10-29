@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import itertools
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -81,6 +82,26 @@ def workspace() -> str:
     handle = tempfile.TemporaryDirectory(prefix="runtime-smoke-")
     handles.append(handle)
     return handle.name
+
+
+def cleanup(handle: tempfile.TemporaryDirectory[str], image: str) -> None:
+    """Remove a fixture from the host, tolerating container-owned inodes.
+
+    The containers run as root, so files they create inside a bind mount are
+    root-owned on the host. CI's unprivileged runner can then delete them but
+    not chmod their parent, which makes `TemporaryDirectory.cleanup` raise
+    after a fully green run. The host tries first; if it loses the race with
+    permissions, the container deletes the contents and the host retries.
+    """
+    path = handle.name
+    try:
+        handle.cleanup()
+        return
+    except OSError:
+        pass
+    docker("run", "--rm", "-v", f"{path}:/w", "--entrypoint", "bash", image,
+           "-c", "rm -rf /w/* /w/.[!.]* 2>/dev/null || :", check=False)
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def stack(image: str, delay: str = "0.2", source: Path | None = None) -> str:
@@ -183,7 +204,7 @@ def proxy(
         image,
         script,
         env={**(env if env is not None else {"CADDY_DOMAINS": "allowed.example"}), "NORMALIZE": "1" if normalize else ""},
-        binds=(f"{root}:/w", "/tmp/echo_srv.js:/echo_srv.js:ro"),
+        binds=(f"{root}:/w", f"{ROOT}/echo_srv.js:/echo_srv.js:ro"),
         source=source,
     )
 
@@ -1330,7 +1351,7 @@ def main() -> None:
         for name in list(containers):
             stop(name)
         for handle in handles:
-            handle.cleanup()
+            cleanup(handle, image)
     suite.report()
 
 
