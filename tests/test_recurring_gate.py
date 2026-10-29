@@ -132,6 +132,8 @@ def assert_app_name_is_recorded(
     case.assertIsInstance(app, str)
     case.assertRegex(app, r"^[a-z0-9][a-z0-9-]*$")
     case.assertIn(f"fly apps create {app}", readme)
+    # The deploy token is scoped to the same app, so it is a third rename site.
+    case.assertIn(f"fly tokens create deploy -a {app}", readme)
     # The note is what stops the next rename from updating only one place.
     case.assertIn("rename must be synced", fly)
     # CI resolves the name from `fly.toml` and passes `-a` everywhere, so a
@@ -426,6 +428,14 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(explicit, build)
         with self.assertRaises(AssertionError):
             assert_app_name_is_recorded(self, fly, readme, explicit)
+
+        # Third mutation: leave `fly.toml` alone and scope the documented token
+        # to another app. The deploy then fails after its own guard passed.
+        token = readme.replace("fly tokens create deploy -a bxx-uptime-kuma",
+                               "fly tokens create deploy -a other-app", 1)
+        self.assertNotEqual(token, readme)
+        with self.assertRaises(AssertionError):
+            assert_app_name_is_recorded(self, fly, token, build)
 
     def test_every_action_is_pinned_to_a_commit(self) -> None:
         """A floating tag can be retargeted under a green, unchanged repo."""

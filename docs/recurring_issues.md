@@ -301,7 +301,8 @@ Regression gate: the digest check rejects a mutable image, a tampered binary
 fails the build, the deploy job needs `build` which needs `validate`, the
 published digest is the amd64 manifest, and the history scan stays clean. The
 recorded app name matches the README and every `-a` in the deploy job, and
-renaming it in only one place fails. The two verifier filters are executed
+renaming it in one place, or documenting the deploy token for another app,
+fails. The two verifier filters are executed
 against fixture JSON: a stale release, an unfinished release, a stale machine
 digest, a stopped machine, a critical, a missing or an unmatchable health check,
 a bad host, and an undeployed app all reject, while the matching one passes.
