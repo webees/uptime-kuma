@@ -25,21 +25,9 @@
 
 # ── Site Block ────────────────────────────────────────────────────────────────
 :80 {
-	# Always allow health checks bypass for Fly.io monitoring
-	handle /icon.svg {
-		reverse_proxy localhost:3001
-	}
-
-	# Domain Access Control
-	@denied {
-		expression {env.CADDY_DOMAINS} != ""
-		not host {$CADDY_DOMAINS:localhost}
-	}
-	respond @denied "Access Denied: Domain not allowed" 403
-
 	encode zstd gzip
 
-	# Harden security posture
+	# Applied before routing so the 403 and the health answer carry them too.
 	header {
 		Strict-Transport-Security "max-age=31536000;"
 		X-Content-Type-Options "nosniff"
@@ -53,9 +41,30 @@
 		-Last-Modified
 	}
 
-	# Proxy to the application backend
-	reverse_proxy localhost:3001 {
-		header_up X-Real-IP {client_ip}
-		header_up X-Forwarded-For {client_ip}
+	# One ordered chain: the health escape first, then the single host gate.
+	route {
+		# Fly's health check must not depend on the application or the allowlist.
+		@health path /health
+		handle @health {
+			respond "OK" 200
+		}
+
+		# One matcher owns the allowlist: unset means allow everything, otherwise
+		# only the listed names pass. `:localhost` also keeps the host matcher
+		# from being null when the value is empty.
+		@denied {
+			expression {env.CADDY_DOMAINS} != ""
+			not host {$CADDY_DOMAINS:localhost}
+		}
+		handle @denied {
+			respond "Access Denied: Domain not allowed" 403
+		}
+
+		handle {
+			reverse_proxy localhost:3001 {
+				header_up X-Real-IP {client_ip}
+				header_up X-Forwarded-For {client_ip}
+			}
+		}
 	}
 }

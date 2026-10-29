@@ -11,6 +11,7 @@ retried.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent
 SCRIPTS = REPO_ROOT / "scripts"
+SOURCE = REPO_ROOT
 
 STARTED = "__case_started__"
 ENDED = "__case_ended__="
@@ -105,20 +107,28 @@ def case(
     """Run one isolated container case, retrying only an unmarked attempt.
 
     ``binds`` are extra ``host:container`` mounts for fixtures; ``prepare`` runs
-    inside the same marker scope; ``source`` mounts a mutated copy of
-    ``scripts/`` instead of the working tree, which is how a mutation control
-    proves that a guard is actually live.
+    inside the same marker scope; ``source`` is a repository-root-shaped
+    directory (``scripts/`` plus ``config/``), mounted instead of the working
+    tree so a mutation control can prove that a guard is actually live.
+
+    The staging step mirrors the Dockerfile ``COPY`` lines exactly and runs
+    inside the marker scope, so a path the image needs but the harness forgets
+    is a product-visible failure instead of a silently swallowed ``cp``.
     """
-    source = source or SCRIPTS
-    # Mirror the Dockerfile layout: scripts/ and config/ land in /.
+    source = source or SOURCE
     body = (
-        "cp /src/scripts/* / 2>/dev/null; cp /src/config/* / 2>/dev/null;"
-        " chmod +x /restic.sh 2>/dev/null; true\n"
+        "set -e\n"
+        "cp -a /src/config/crontab /src/config/Caddyfile /src/scripts/restic.sh /src/scripts/services.sh /\n"
+        "chmod +x /services.sh\n"
+        "mkdir -p /entrypoint && cp -a /src/scripts/entrypoint/. /entrypoint/\n"
+        "cp -a /src/scripts/entrypoint.sh /entrypoint.sh\n"
+        "chmod +x /restic.sh /entrypoint.sh\n"
     ) + "\n".join(
         (
             f"printf '%s\\n' '{STARTED}'",
             "status=0",
             "(",
+            "set -e",
             prepare,
             script,
             ") || status=$?",
@@ -171,10 +181,7 @@ def mutate(relative: str, replacements: tuple[tuple[str, str], ...], into: Path)
     """Copy ``scripts/`` and ``config/`` with a deliberately weakened file."""
     target = into / "src"
     for name in ("scripts", "config"):
-        (target / name).mkdir(parents=True, exist_ok=True)
-        for item in (REPO_ROOT / name).iterdir():
-            if item.is_file():
-                (target / name / item.name).write_bytes(item.read_bytes())
+        shutil.copytree(REPO_ROOT / name, target / name)
     path = target / relative
     text = path.read_text(encoding="utf-8")
     for old, new in replacements:
