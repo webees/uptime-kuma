@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import json
 from pathlib import Path
 import subprocess
 import tomllib
@@ -123,6 +124,45 @@ def workflow(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
 
 
+IMAGE = "ghcr.io/example/uptime-kuma@sha256:" + "a" * 64
+
+
+def deploy_verification(step: str) -> tuple[str, str]:
+    """Extract the two ``jq`` programs the deploy job feeds to the Fly API."""
+    return tuple(
+        block.group(1)
+        for block in re.finditer(
+            r"jq -e --arg image \"\$EXPECTED_IMAGE\" '\n(.*?)\n\s*'", step, re.DOTALL
+        )
+    )
+
+
+def run_jq(program: str, document: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["jq", "-e", "--arg", "image", IMAGE, program],
+        input=document, capture_output=True, text=True, check=False,
+    )
+
+
+def fly_releases(image: str, status: str = "complete") -> str:
+    return json.dumps([
+        {"Version": 3, "ImageRef": IMAGE, "Status": "complete"},
+        {"Version": 4, "ImageRef": image, "Status": status},
+    ])
+
+
+def fly_status(image: str, **machine) -> str:
+    entry = {
+        "state": "started",
+        "host_status": "ok",
+        "image_ref": {"registry": "ghcr.io", "repository": "example/uptime-kuma",
+                      "digest": image.split("@")[-1]},
+        "checks": [{"status": "passing"}],
+    }
+    entry.update(machine)
+    return json.dumps({"Status": "deployed", "Machines": [entry]})
+
+
 class RecurringContractTest(unittest.TestCase):
     def test_registry_references_existing_evidence(self) -> None:
         for references in CLASS_EVIDENCE.values():
@@ -160,6 +200,36 @@ class RecurringContractTest(unittest.TestCase):
         self.assertIn("workflow_call: {}", validate)
         self.assertIn("python3 tests/runtime_smoke.py", validate)
         self.assertIn("caddy validate --config /Caddyfile", validate)
+
+    def test_deploy_verification_rejects_every_mismatch(self) -> None:
+        """The recorded evidence must be about *this* digest, on every machine."""
+        step = workflow("ghcr.yaml").split("Verify the deployment")[1]
+        releases, status = deploy_verification(step)
+
+        self.assertEqual(run_jq(releases, fly_releases(IMAGE)).returncode, 0)
+        self.assertEqual(run_jq(status, fly_status(IMAGE)).returncode, 0)
+
+        other = IMAGE.replace("a" * 64, "b" * 64)
+        for label, program, document in (
+            ("an older release", releases, fly_releases(other)),
+            ("an unfinished release", releases, fly_releases(IMAGE, "failed")),
+            ("a stale machine digest", status, fly_status(other)),
+            ("a stopped machine", status, fly_status(IMAGE, state="stopped")),
+            ("a failing check", status, fly_status(IMAGE, checks=[{"status": "critical"}])),
+            ("no check at all", status, fly_status(IMAGE, checks=[])),
+            ("a host that is not ok", status, fly_status(IMAGE, host_status="bad")),
+            ("an undeployed app", status, json.dumps({"Status": "pending", "Machines": []})),
+        ):
+            self.assertNotEqual(run_jq(program, document).returncode, 0, label)
+
+        # Mutation control: drop the digest comparison and the stale machine
+        # becomes acceptable again.
+        weakened = re.sub(
+            r'\n\s*and \(\(\(\.image_ref\.registry.*?== \$image\)', "", status, count=1, flags=re.DOTALL
+        )
+        self.assertNotEqual(weakened, status)
+        self.assertEqual(run_jq(weakened, fly_status(IMAGE)).returncode, 0)
+        self.assertEqual(run_jq(weakened, fly_status(other)).returncode, 0)
 
     def test_fly_toml_has_no_mutable_image(self) -> None:
         fly = (ROOT / "fly.toml").read_text(encoding="utf-8")

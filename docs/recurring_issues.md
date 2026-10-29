@@ -241,11 +241,16 @@ Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/ghcr.yaml:digest`.
 
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`
-and `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base`.
+and `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base`; the
+deploy verifier carries its own control that deletes the digest comparison.
 
 Regression gate: the digest check rejects a mutable image, a tampered binary
 fails the build, the deploy job needs `build` which needs `validate`, the
-published digest is the amd64 manifest, and the history scan stays clean.
+published digest is the amd64 manifest, and the history scan stays clean. The
+two verifier filters are executed against fixture JSON: a stale release, an
+unfinished release, a stale machine digest, a stopped machine, a critical, a
+missing or an unmatchable health check, a bad host, and an undeployed app all
+reject, while the matching one passes.
 
 ## Simplification Rule
 
