@@ -655,6 +655,25 @@ def check_bounded_diagnostics(image: str) -> None:
         probes(failed_tail),
     )
 
+    # `write_log_entry` cannot even create its temporary file: the run must
+    # stop there rather than continue without a bound and report success.
+    write_failure = (
+        "mkdir -p /w/bin\n"
+        "printf '%s\\n' '#!/bin/sh' 'exit 1' > /w/bin/mktemp; chmod +x /w/bin/mktemp\n"
+        "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+        "rc=0; PATH=\"/w/bin:$PATH\" /restic.sh backup >/dev/null 2>&1 || rc=$?\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n"
+        "printf '@ state=%s\\n' \"$(sed -n 's/^state=//p' /w/data/backup-status.txt)\"\n"
+        "printf '@ backend=%s\\n' \"$(test -f /w/repo/config && echo called || echo never)\"\n"
+    )
+    failed_write = run(image, write_failure, workspace())
+    expect_pass(suite, failed_write, "C5 failing log write case runs", "C5 failing log write case failed")
+    suite.same(
+        "C5 a failing log write fails closed before the backend",
+        ["@ rc=2", "@ state=failed", "@ backend=never"],
+        probes(failed_write),
+    )
+
     with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
         unbounded = mutate(
             RESTIC,
@@ -693,6 +712,22 @@ def check_bounded_diagnostics(image: str) -> None:
             "C5 mutation: without the capture guard a failed tail still succeeds",
             ["@ rc=0", "@ state=ok", "@ backend=called"],
             probes(ignored),
+        )
+
+        # The same downgrade for persistence: a broken write becomes a warning
+        # and the run finishes `ok` with nothing on disk.
+        (Path(tmp) / "unwritten").mkdir()
+        unwritten = mutate(
+            RESTIC,
+            (("    write_log_entry \"$body\" || exit 2\n", "    write_log_entry \"$body\" || :\n"),),
+            Path(tmp) / "unwritten",
+        )
+        lost = run(image, write_failure, workspace(), source=unwritten)
+        expect_pass(suite, lost, "C5 swallowed-write mutation runs", "C5 swallowed-write mutation failed")
+        suite.same(
+            "C5 mutation: without the write guard a failed write still succeeds",
+            ["@ rc=0", "@ state=ok", "@ backend=called"],
+            probes(lost),
         )
 
     # A cap that cannot be re-enforced after the run must not end in `ok`.

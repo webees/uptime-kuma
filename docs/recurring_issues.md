@@ -163,13 +163,15 @@ Authority: `scripts/restic.sh:trim_logs`, `scripts/restic.sh:write_log_entry`,
 and `scripts/restic.sh:log`.
 
 Mutation control: `tests/runtime_smoke.py:check_bounded_diagnostics` (persist-time
-truncation removed, capture-failure guard removed, then the post-run guard
-disabled). A broken `tail` only fails the first stdin capture, so removing the
-guard is what turns the same run from exit 2 into a false `ok`.
+truncation removed, capture-failure guard removed, write-failure guard removed,
+then the post-run guard disabled). A broken `tail` only fails the first stdin
+capture, so removing that guard is what turns the same run from exit 2 into a
+false `ok`; the write control fails only `mktemp` and proves the same downgrade
+for persistence.
 
 Regression gate: oversized output, a failing `tail`, an unmaintainable directory
-before work (backend never called), an unmaintainable directory after work, and a
-write failure all fail closed inside their cap.
+before work (backend never called), an unmaintainable directory after work, and
+a failing log write all fail closed inside their cap.
 
 ## State, Lock And Process Supervision
 
