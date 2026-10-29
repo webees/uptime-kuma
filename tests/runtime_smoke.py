@@ -628,6 +628,33 @@ def check_bounded_diagnostics(image: str) -> None:
     expect_pass(suite, guarded, "C5 hostile output still fails cleanly", "C5 hostile output case failed")
     suite.same("C5 guarded run keeps the failed log inside the cap", "4096", probes(guarded)[1].split("=")[1])
 
+    # A failing `tail` means the bound itself is broken: the run must abort
+    # rather than persist an unbounded capture. Only the first stdin capture
+    # (`tail -c N`, no file operand) fails, so the observation stays on the
+    # capture guard instead of also breaking trim or the write bookkeeping.
+    tail_failure = (
+        "mkdir -p /w/bin\n"
+        "printf '%s\\n' '#!/bin/sh'"
+        " 'if [ \"$1\" = -c ] && [ \"$#\" -eq 2 ]; then'"
+        " '  n=\"$(cat /w/tail.calls 2>/dev/null || echo 0)\"'"
+        " '  echo $((n + 1)) > /w/tail.calls'"
+        " '  [ \"$n\" -gt 0 ] || exit 1'"
+        " 'fi'"
+        " 'exec /usr/bin/tail \"$@\"' > /w/bin/tail; chmod +x /w/bin/tail\n"
+        "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+        "rc=0; PATH=\"/w/bin:$PATH\" /restic.sh backup >/dev/null 2>&1 || rc=$?\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n"
+        "printf '@ state=%s\\n' \"$(sed -n 's/^state=//p' /w/data/backup-status.txt)\"\n"
+        "printf '@ backend=%s\\n' \"$(test -f /w/repo/config && echo called || echo never)\"\n"
+    )
+    failed_tail = run(image, tail_failure, workspace())
+    expect_pass(suite, failed_tail, "C5 failing tail case runs", "C5 failing tail case failed")
+    suite.same(
+        "C5 a failing tail fails closed before the backend",
+        ["@ rc=2", "@ state=failed", "@ backend=never"],
+        probes(failed_tail),
+    )
+
     with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
         unbounded = mutate(
             RESTIC,
@@ -649,6 +676,23 @@ def check_bounded_diagnostics(image: str) -> None:
             "C5 mutation: the log grows past the cap",
             "4299",
             probes(control)[1].split("=")[1],
+        )
+
+        # Dropping the capture-failure guard makes the same broken `tail` look
+        # like a good run.
+        (Path(tmp) / "swallowed").mkdir()
+        swallowed = mutate(
+            RESTIC,
+            (("    [ \"$rc\" -eq 0 ] || { echo \"Error: cannot capture bounded log output\" >&2; exit 2; }\n",
+              ""),),
+            Path(tmp) / "swallowed",
+        )
+        ignored = run(image, tail_failure, workspace(), source=swallowed)
+        expect_pass(suite, ignored, "C5 swallowed-failure mutation runs", "C5 swallowed-failure mutation failed")
+        suite.same(
+            "C5 mutation: without the capture guard a failed tail still succeeds",
+            ["@ rc=0", "@ state=ok", "@ backend=called"],
+            probes(ignored),
         )
 
     # A cap that cannot be re-enforced after the run must not end in `ok`.
