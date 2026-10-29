@@ -303,6 +303,11 @@ the publish concurrency group with `cancel-in-progress: false`, and hold an
 `older-than` window of at least 7 days plus a `keep-n-tagged` floor. Dropping
 the push trigger, giving cleanup its own group, or tightening the window to a
 day each fails with its own mutation control.
+`validate.yml` is both a `workflow_call` target and a standalone workflow, so
+its concurrency group must include the workflow name: keyed only on the ref,
+the nested copy and its standalone twin share a group under
+`cancel-in-progress: true` and the publish run is cancelled before `build`
+(observed: run `40904431995`, 3s, `build` and `deploy` skipped).
 
 ## Simplification Rule
 

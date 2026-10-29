@@ -13,8 +13,13 @@ on:
 permissions:
   contents: read
 
+# The same push triggers a standalone Validate and the one nested in the
+# publish workflow. Keyed only on the ref, the two share a group and the nested
+# copy is cancelled by its own twin before it starts (observed: publish run
+# cancelled after 3s). Keying on the workflow name separates them, so a newer
+# push still cancels an outdated run of the same kind without killing the pair.
 concurrency:
-  group: validate-${{ github.ref }}
+  group: validate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

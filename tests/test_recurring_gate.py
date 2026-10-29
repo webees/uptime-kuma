@@ -229,6 +229,26 @@ def assert_cleanup_runs_and_cannot_race(case: unittest.TestCase, cleanup: str, b
     case.assertIn("delete-untagged: true", cleanup)
 
 
+def assert_validate_concurrency_is_distinct(case: unittest.TestCase, validate: str, build: str) -> None:
+    """A reused workflow must not share its caller's group key.
+
+    The same push triggers a standalone Validate run and the copy nested in the
+    publish workflow. With a group keyed only on the ref, both land in one
+    group under `cancel-in-progress: true` and the nested copy is cancelled by
+    its own twin, which cancels the whole publish run before `build`.
+    """
+    match = re.search(r"(?m)^concurrency:\n\s*group:\s*(.+?)\s*$", validate)
+    case.assertIsNotNone(match, "validate needs an explicit concurrency group")
+    group = match.group(1)
+    case.assertIn("github.workflow", group, "the group must distinguish callers")
+    case.assertNotEqual(group, "validate-${{ github.ref }}")
+
+    # The publish side keys on the registry; validate must not equal it.
+    caller = re.search(r"(?m)^concurrency:\n\s*group:\s*(.+?)\s*$", build)
+    case.assertIsNotNone(caller)
+    case.assertNotEqual(group, caller.group(1))
+
+
 IMAGE = "ghcr.io/example/uptime-kuma@sha256:" + "a" * 64
 
 
@@ -451,6 +471,21 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(one_day, cleanup)
         with self.assertRaises(AssertionError):
             assert_cleanup_runs_and_cannot_race(self, one_day, build)
+
+    def test_validate_does_not_cancel_the_publish_run(self) -> None:
+        validate = workflow("validate.yml")
+        build = workflow("ghcr.yaml")
+        assert_validate_concurrency_is_distinct(self, validate, build)
+
+        # Mutation control: the exact key that caused the cancelled publish.
+        shared = validate.replace(
+            "  group: validate-${{ github.workflow }}-${{ github.ref }}",
+            "  group: validate-${{ github.ref }}",
+            1,
+        )
+        self.assertNotEqual(shared, validate)
+        with self.assertRaises(AssertionError):
+            assert_validate_concurrency_is_distinct(self, shared, build)
 
 
 class RecurringMutationTest(unittest.TestCase):
