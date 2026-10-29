@@ -193,9 +193,9 @@ fails when a class, a field, or a mutation control disappears.
   renamed in the same commit.
 - The image is only published and deployed from GitHub Actions; a manual
   `fly deploy` builds this Dockerfile and bypasses the digest gate.
-- `deploy` has no retry of its own. A Fly control-plane error fails the job and
-  needs a `gh run rerun --failed` (observed once: HTTP 503 fetching the
-  organization).
+- `deploy` retries only transient Fly 5xx up to three attempts with backoff.
+  A longer control-plane outage still fails the job and needs
+  `gh run rerun --failed` (observed twice: `status 503`).
 - Nothing triggers a restore drill or a real backup on a schedule; both were
   proven inside the image only.
 

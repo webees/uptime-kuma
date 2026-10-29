@@ -140,7 +140,27 @@ jobs:
           app="$(sed -n 's/^app = "\(.*\)"$/\1/p' fly.toml)"
           test -n "$app"
           echo "APP=$app" >> "$GITHUB_ENV"
-          flyctl deploy -a "$app" --image "$EXPECTED_IMAGE" --yes
+          # Fly's control plane intermittently answers 5xx on the release path
+          # (observed twice: `failed to create release (status 503)`). Retry
+          # only that class with backoff; the same digest makes it idempotent,
+          # and anything else fails immediately instead of being masked.
+          attempt=1
+          while :; do
+            if flyctl deploy -a "$app" --image "$EXPECTED_IMAGE" --yes \
+              2>&1 | tee "$RUNNER_TEMP/deploy.log"; then
+              break
+            fi
+            status="${PIPESTATUS[0]}"
+            if [ "$attempt" -ge 3 ] ||
+              ! grep -qE 'status (502|503|504)|Service Unavailable' "$RUNNER_TEMP/deploy.log"; then
+              echo "::error::deploy failed (attempt $attempt, exit $status) without a transient upstream error" >&2
+              exit "$status"
+            fi
+            delay=$((attempt * 30))
+            echo "transient Fly error on attempt $attempt; retrying in ${delay}s" >&2
+            sleep "$delay"
+            attempt=$((attempt + 1))
+          done
 
       # A successful deploy is not readiness: verify the release, the digest on
       # every machine and the passing health check.

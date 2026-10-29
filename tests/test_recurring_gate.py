@@ -221,6 +221,27 @@ def assert_weekly_rebuild_is_scheduled(case: unittest.TestCase, build: str) -> N
     case.assertIn("github.ref == 'refs/heads/main'", build)
 
 
+def assert_deploy_retries_only_transient_errors(case: unittest.TestCase, build: str) -> None:
+    """Fly answers 5xx on the release path independently of our commit.
+
+    Retrying is only safe because the digest is fixed, so a retry can never
+    ship a different image. A bounded attempt count keeps a real outage from
+    hanging the job, and the transient filter keeps a genuine failure from
+    being masked by two more identical attempts.
+    """
+    step = build.split("Deploy the exact digest")[1].split("Verify the deployment")[0]
+    case.assertIn("attempt=1", step)
+    case.assertRegex(step, r"attempt.*-ge 3", "the retry need not be unbounded")
+    case.assertIn("status (502|503|504)", step)
+    case.assertIn("sleep", step)
+    # Backoff grows, so a recovering control plane is not hammered.
+    case.assertRegex(step, r"delay=\$\(\(attempt \* \d+\)\)")
+    # The digest is what makes a retry idempotent; a tag would not be.
+    case.assertIn('--image "$EXPECTED_IMAGE"', step)
+    # Fail closed: the last attempt exits even when the text still matches.
+    case.assertRegex(step, r"exit \"\$status\"")
+
+
 def assert_cleanup_runs_and_cannot_race(case: unittest.TestCase, cleanup: str, build: str) -> None:
     """A cleanup that never fires, or fires mid-publish, is worse than none.
 
@@ -494,6 +515,28 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(monthly, build)
         with self.assertRaises(AssertionError):
             assert_weekly_rebuild_is_scheduled(self, monthly)
+
+    def test_deploy_retries_only_transient_errors(self) -> None:
+        build = workflow("ghcr.yaml")
+        assert_deploy_retries_only_transient_errors(self, build)
+
+        # Mutation control: drop the transient filter, so a permanent failure
+        # is retried anyway and only the attempt bound ends it.
+        unfiltered = build.replace(
+            "! grep -qE 'status (502|503|504)|Service Unavailable' \"$RUNNER_TEMP/deploy.log\"",
+            "false",
+            1,
+        )
+        self.assertNotEqual(unfiltered, build)
+        with self.assertRaises(AssertionError):
+            assert_deploy_retries_only_transient_errors(self, unfiltered)
+
+        # Second control: make the retry unbounded, so a dead control plane
+        # keeps the job until its timeout instead of exiting.
+        unbounded = build.replace('[ "$attempt" -ge 3 ]', 'false', 1)
+        self.assertNotEqual(unbounded, build)
+        with self.assertRaises(AssertionError):
+            assert_deploy_retries_only_transient_errors(self, unbounded)
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""
