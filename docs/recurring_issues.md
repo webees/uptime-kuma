@@ -1,0 +1,265 @@
+# Recurring Engineering Decisions
+
+This file records defects fixed more than once in this repository, especially
+where a later simplification removed the fix. Every entry is a permanent
+invariant: a change that weakens one needs a failing regression test and an
+explicit replacement design first.
+
+Five classes are regressions: `C1` (host gate), `C2` (client IP), `C3` (SQLite
+hot copy), `C5` (bounded output), and `C9` (simplification). Three were never
+established: `C4` (restore isolation), `C6` (lock/state/supervision), `C7`
+(input audit). `C8` was partial: a mooted pin, no validation, no ignore file.
+The recurring pattern is not only missing code; it is removing an existing
+invariant while optimizing line count. Commit identifiers below are evidence,
+not exceptions to the rules.
+
+Audit baseline: all 43 commits reachable through `fd86130` on 2026-10-29. Every
+later round must extend that audit to every commit reachable at its start.
+
+## Target-Mode Prompt
+
+Every new, resumed, review, optimization, scoring, release, and post-merge round
+starts with this gate. Build a nine-row evidence matrix containing the class,
+history classification, authoritative guard, positive/boundary/negative
+evidence, named mutation control, and observed result. Run the named mutation
+control and prove that removing the guard changes the outcome. If a row is
+failing, unverified, or shows a guard weakened by simplification, repair the
+invariant in the same round before other work. Do not optimize, score, merge,
+deploy, or claim completion while any row lacks evidence or has an unclassified
+residual. Record the matrix in the PR or final report without creating
+per-round files. The matrix is a review artifact, not a score: a passing row
+requires observed command or test output.
+
+## Every-Round Goal Gate
+
+Before any other audit, optimization, scoring, or completion work in a round,
+scan every recorded failure class below against the current implementation and
+run its regression gate. For each class, trace reachable history with
+`git log -S` and `git log -G`, then classify it as never fixed, regressed after
+simplification, or partially fixed, and identify the one authoritative
+implementation.
+
+- If history shows a regression or a weakened invariant, restore that invariant
+  in the round's first patch before unrelated optimization. Do not combine that
+  patch with line-count reduction.
+- Check every execution path that reaches the invariant, not only the path named
+  in a previous fix. A guard on preflight, one command, or one caller is partial
+  until all equivalent paths enforce it.
+- Every class on every round must have positive, boundary, negative, and
+  mutation-control tests. Run the named mutation control and verify that it
+  fails when the authoritative guard is removed.
+- Update the affected History, Final decision, and Regression gate when
+  evidence changes.
+- No score or completion claim is valid while any recorded gate is missing,
+  failing, or unverified. An accepted residual stays explicitly open and never
+  counts as passing.
+
+## Host Policy And Health Escape
+
+History: `5471baa` introduced `@outside_domain` plus a Caddy-answered `/health`,
+`7856ff0` repaired the empty-value crash, `2552bc6` switched to
+`@allowed`/`host(...localhost)`, `0ea83e3` switched to `@denied` plus `respond`,
+and `a839ef2` rewrote it again while deleting `/health`. `3ec25bd` then pointed
+the Fly probe at a path that needs the application.
+
+Final decision: exactly one host matcher exists, in one ordered `route` chain
+that also carries the health escape. An empty or blank `CADDY_DOMAINS` is
+unset so the same matcher evaluates to allow-all; a non-empty value matches
+each listed bare DNS name exactly; everything else answers 403 with the full
+security header set. `/health` is answered by Caddy and never reaches the
+application, so the Fly probe survives a dead app and a denied host.
+
+Authority: `config/Caddyfile:@health`, `config/Caddyfile:@denied`, and
+`scripts/entrypoint/config.sh:normalize_caddy_domains`.
+
+Mutation control: `tests/runtime_smoke.py:check_host_policy` (health moved after
+the gate, headers moved into the backend, `unset` removed).
+
+Regression gate: unset, empty, and blank allowlists allow every host; a single
+name, a space-separated list, upper case, and a denied host behave exactly;
+denied responses keep every security header; the probe answers 200 with headers
+for a denied host; a trailing dot in configuration is rejected; an empty value
+without the `unset` stops Caddy adapting.
+
+## Client IP Attribution
+
+History: `5471baa` used `CF-Connecting-IP`, then `Fly-Client-IP`, then
+`remote_host`. `0ea83e3` and `a839ef2` reduced it to `Fly-Client-IP` only, so a
+Cloudflare request degraded to the edge address; `fd86130` restored the chain.
+
+Final decision: one ordered fallback, `CF-Connecting-IP`, then `Fly-Client-IP`,
+then the remote peer. An empty value falls through instead of being forwarded.
+Headers are only read from trusted peers, so a client-supplied copy is not
+believed. `X-Real-IP` and `X-Forwarded-For` carry the same single-hop value.
+
+Authority: `config/Caddyfile:client_ip_headers` and `config/Caddyfile:header_up`.
+
+Mutation control: `tests/runtime_smoke.py:check_client_ip` (Cloudflare hop
+removed).
+
+Regression gate: all three sources present, only the Fly header, only the remote
+peer, all three empty, and a forged client header are covered, plus the
+single-hop assertion on both forwarded headers.
+
+## Consistent SQLite Backup
+
+History: `0066949` and `9972497` used `sqlite3 .backup`, `PRAGMA
+integrity_check`, and excluded the live files. `5471baa` deleted the copy and
+shipped the live `kuma.db` with its sidecars; `e4fc3e5` restored the checked copy.
+
+Final decision: the backup takes a `.backup` snapshot, proves the copy with a
+single `ok` from `integrity_check`, and only then runs the backend. The live
+database and its `-journal`/`-wal`/`-shm` sidecars are excluded. Any failure
+aborts before the backend and records no success time; the temporary copy is
+removed on success and on failure.
+
+Authority: `scripts/restic.sh:sqlite_snapshot` and
+`scripts/restic.sh:sqlite_check`.
+
+Mutation control: `tests/runtime_smoke.py:check_sqlite_consistency` (live files
+backed up directly).
+
+Regression gate: a healthy database yields an `ok` check, a corrupted one aborts
+without calling the backend, the snapshot contains no live file, and the
+temporary copy never survives either outcome.
+
+## Restore Isolation And Confirmation
+
+History: never established before this round; `restore` always overwrote
+`/app/data` in place with no drill and no confirmation.
+
+Final decision: the drill extracts into an isolated scratch directory and
+validates SQLite there, touching no production file. In-place restore requires
+`RESTORE_CONFIRM=yes`, refuses a symlinked or non-regular live database, stages
+through `.restore`, and copies the current database to `kuma.db.previous` with
+`.backup` before the swap, so a restorable previous state survives it. Stale
+sidecars are dropped only at the swap, and a failed stage never touches the
+live file.
+
+Authority: `scripts/restic.sh:restore_test` and `scripts/restic.sh:restore`.
+
+Mutation control: `tests/runtime_smoke.py:check_restore_isolation` (drill
+retargeted at the live data directory).
+
+Regression gate: isolated drill, missing confirmation refused, symlink refused,
+non-regular file refused, copy failure leaves the live database intact, and the
+rollback copy holds the pre-restore state after a successful swap.
+
+## Bounded Diagnostics
+
+History: `1a9d3bb` used `tee -a` with no cap. `5471baa` and `a839ef2` rewrote
+`log()`/`run()` between the crontab and the script while capture stayed
+unbounded in shell memory; `e4fc3e5` restored trimming only before a backup, so
+a failure after backend work was downgraded to a warning and still recorded as
+success.
+
+Final decision: output is bounded at capture time with `tail -c`, bounded again
+before it is persisted, and the log file is replaced atomically inside its byte
+cap. The per-file and per-directory caps are independent safeguards checked
+before work and again after backend work. Capture, trim, and write failures
+abort and record a failure instead of producing a false success.
+
+Authority: `scripts/restic.sh:trim_logs`, `scripts/restic.sh:write_log_entry`,
+and `scripts/restic.sh:log`.
+
+Mutation control: `tests/runtime_smoke.py:check_bounded_diagnostics` (persist-time
+truncation removed, then the post-run guard disabled).
+
+Regression gate: oversized output, a failing `tail`, an unmaintainable directory
+before work (backend never called), an unmaintainable directory after work, and a
+write failure all fail closed inside their cap.
+
+## State, Lock And Process Supervision
+
+History: never established before this round. `restic unlock ... || true` hid a
+stale lock, `@hourly` could overlap itself, and `overmind` restarted a dead
+application while leaving a dead proxy dead.
+
+Final decision: one `flock` decides concurrency and only the holder publishes
+`running`; a skipped run exits 3 without touching the marker. Missing,
+unreadable, oversized, non-regular, stale-running, and in-flight states stay
+distinct and none of them blocks the next run. Status writes rename a sibling
+temp file, so a failure keeps the previous marker. One supervisor owns the
+process table: Caddy and the scheduler restart after a validated positive
+delay, and an application exit stops the container so Fly recovers the machine.
+
+Authority: `scripts/restic.sh:write_status` and `scripts/services.sh:supervise`.
+
+Mutation control: `tests/runtime_smoke.py:check_lock_and_state` (in-place status
+write) and `tests/runtime_smoke.py:check_process_supervision` (restartable
+application, non-restartable proxy).
+
+Regression gate: a held lock skips, an unusable status path fails closed, a stale
+running marker, an unknown state, an oversized marker, and a symlinked marker all
+recover, a failed rename keeps the old marker, a forced Caddy or scheduler exit
+returns with a new pid and a logged backoff, the proxy serves again, an
+application exit stops the container, and a zero or malformed delay fails closed
+before any service starts.
+
+## Address And Secret Input Audit
+
+History: never established before this round. `CADDY_DOMAINS`,
+`RESTIC_REPOSITORY`, `HEALTHCHECK_URL`, and the `SMTP_*` values were spliced
+into Caddy, restic, and `msmtprc` unvalidated, so a newline injected a config
+line and an IP-shaped host silently never matched.
+
+Final decision: one DNS host rule and one HTTPS URL rule are shared by every
+call site, with an absolute path or unambiguous `s3://` rule for the restic
+target. SMTP values may not span lines. A username requires a password and a
+password a username. All of it runs at start-up and fails closed.
+
+Authority: `scripts/entrypoint/config.sh:valid_dns_name`,
+`scripts/entrypoint/config.sh:validate_https_url`, and
+`scripts/entrypoint/config.sh:validate_smtp`.
+
+Mutation control: `tests/runtime_smoke.py:check_address_audit` (numeric host
+guard removed, `//` segment guard removed).
+
+Regression gate: legal names, digit-bearing labels, IPv4 in dotted, short, and
+hex form, bracketed IPv6, userinfo, an empty S3 segment, a relative path, and a
+newline are all covered as accepted or rejected.
+
+## Supply Chain And Public Surface
+
+History: `f11e477`, `35ad898`, `74565b0`, `9972497`, and `133ee5d` each swapped
+a mutable base tag (`nightly2-rootless`, `2`, a beta) with no digest, and the
+scheduler had no checksum. There was no validation workflow, no `.dockerignore`,
+and `.env` was committed. Each gap is closed in this round.
+
+Final decision: the base image is pinned by index digest and the downloaded
+scheduler by per-architecture sha256 verified before use. Deployment names the
+exact amd64 manifest digest produced by a build that passed `validate`;
+`fly.toml` carries no image. Validation is a required check. Tracked files and
+reachable history carry no real domain, bucket, token, or machine identifier.
+
+Authority: `Dockerfile` digest/sha arguments,
+`.github/workflows/validate.yml:validate`, and
+`.github/workflows/ghcr.yaml:digest`.
+
+Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`
+and `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base`.
+
+Regression gate: the digest check rejects a mutable image, a tampered binary
+fails the build, the deploy job needs `build` which needs `validate`, the
+published digest is the amd64 manifest, and the history scan stays clean.
+
+## Simplification Rule
+
+History: `a839ef2` removed 177 lines in one commit and took the SQLite hot copy,
+`/health`, and the Cloudflare hop with it. Log maintenance moved between crontab
+and script three times without gaining a bound.
+
+Final decision: line-count reduction is not evidence of quality. A
+simplification may remove duplication only after authority boundaries,
+fail-closed behaviour, bounded resources, atomic state, rollback paths, and the
+negative control for each guard are preserved. This rule outranks further
+compaction, and every class keeps its History, Final decision, Authority,
+Mutation control, and Regression gate sections.
+
+Authority: `tests/test_recurring_gate.py:assert_recurrence_contract`.
+
+Mutation control: `tests/test_recurring_gate.py:test_contract_mutation_removes_authoritative_field`.
+
+Regression gate: the class set and all five fields per class are required, every
+named reference resolves, every gate clause is present, and every existing
+mutation control still turns red when its guard is removed.
