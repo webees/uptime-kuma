@@ -236,8 +236,9 @@ scheduler by per-architecture sha256 verified before use. Deployment names the
 exact amd64 manifest digest produced by a build that passed `validate`;
 `fly.toml` carries no image, and its `app` is the single recorded application
 name that CI resolves and passes as `-a` to both the deploy and the verifier.
-Validation is a required check. Tracked files and reachable history carry no
-real domain, bucket, token, or machine identifier.
+Every workflow action is pinned to a 40-character commit instead of a movable
+tag. Validation is a required check. Tracked files and reachable history carry
+no real domain, bucket, token, or machine identifier.
 
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
@@ -255,6 +256,8 @@ renaming it in only one place fails. The two verifier filters are executed
 against fixture JSON: a stale release, an unfinished release, a stale machine
 digest, a stopped machine, a critical, a missing or an unmatchable health check,
 a bad host, and an undeployed app all reject, while the matching one passes.
+Any non-SHA `uses:` reference fails with its `file:line`, and a single floating
+tag is enough to reproduce it.
 
 ## Simplification Rule
 

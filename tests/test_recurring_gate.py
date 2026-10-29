@@ -142,6 +142,26 @@ def assert_app_name_is_recorded(
     case.assertIn('flyctl status -a "$APP"', build)
 
 
+def unpinned_uses(text: str) -> list[str]:
+    """Return ``line: reference`` for every ``uses:`` that is not a 40-char SHA."""
+    problems = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = re.match(r"\s*(?:-\s+)?uses:\s*(\S+)", line)
+        if not match:
+            continue
+        reference = match.group(1)
+        if reference.startswith("./"):
+            continue
+        if not re.search(r"@[0-9a-f]{40}$", reference):
+            problems.append(f"{number}: {reference}")
+    return problems
+
+
+def assert_actions_are_pinned(case: unittest.TestCase, workflows: dict[str, str]) -> None:
+    for name, text in workflows.items():
+        case.assertEqual(unpinned_uses(text), [], f"{name} has a mutable action reference")
+
+
 IMAGE = "ghcr.io/example/uptime-kuma@sha256:" + "a" * 64
 
 
@@ -276,6 +296,26 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(explicit, build)
         with self.assertRaises(AssertionError):
             assert_app_name_is_recorded(self, fly, readme, explicit)
+
+    def test_every_action_is_pinned_to_a_commit(self) -> None:
+        """A floating tag can be retargeted under a green, unchanged repo."""
+        workflows = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
+        }
+        self.assertEqual(len(workflows), 3)
+        assert_actions_are_pinned(self, workflows)
+
+        # Mutation control: one floating tag is enough to fail, and the message
+        # must name the offending line so the fix is mechanical.
+        name = "ghcr.yaml"
+        weakened = {**workflows, name: workflows[name].replace(
+            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262", "actions/checkout@v4", 1
+        )}
+        self.assertNotEqual(weakened[name], workflows[name])
+        with self.assertRaises(AssertionError) as caught:
+            assert_actions_are_pinned(self, weakened)
+        self.assertIn("actions/checkout@v4", str(caught.exception))
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""
