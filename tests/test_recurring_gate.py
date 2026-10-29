@@ -242,6 +242,25 @@ def assert_deploy_retries_only_transient_errors(case: unittest.TestCase, build: 
     case.assertRegex(step, r"exit \"\$status\"")
 
 
+def assert_flyctl_comes_from_github(case: unittest.TestCase, build: str) -> None:
+    """The setup action resolves `latest` through Fly's own release manifest.
+
+    That endpoint answered 503 and killed the job before the retry could run
+    (run 40959357266), and it made the CLI version float besides. Install the
+    pinned tarball from the GitHub release and verify its sha256 instead.
+    """
+    case.assertNotIn("superfly/flyctl-actions", build)
+    case.assertRegex(build, r"FLYCTL_VERSION: \d+\.\d+\.\d+")
+    case.assertRegex(build, r"FLYCTL_SHA256: [0-9a-f]{64}")
+    # The asset name must carry the pinned version, or the checksum is for
+    # another build than the one downloaded.
+    version = re.search(r"FLYCTL_VERSION: (\d+\.\d+\.\d+)", build).group(1)
+    case.assertIn(f"FLYCTL_ASSET: flyctl_{version}_Linux_x86_64.tar.gz", build)
+    case.assertIn("github.com/superfly/flyctl/releases/download/v${FLYCTL_VERSION}", build)
+    case.assertIn("sha256sum -c -", build)
+    case.assertIn("flyctl version", build)
+
+
 def assert_cleanup_runs_and_cannot_race(case: unittest.TestCase, cleanup: str, build: str) -> None:
     """A cleanup that never fires, or fires mid-publish, is worse than none.
 
@@ -537,6 +556,31 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(unbounded, build)
         with self.assertRaises(AssertionError):
             assert_deploy_retries_only_transient_errors(self, unbounded)
+
+    def test_flyctl_is_pinned_and_not_fetched_through_fly(self) -> None:
+        build = workflow("ghcr.yaml")
+        assert_flyctl_comes_from_github(self, build)
+
+        # Mutation control: back to the action, whose `latest` lookup is the
+        # thing that failed. Everything else can stay intact.
+        restored = build.replace(
+            "      - name: 🛫 Install pinned flyctl",
+            "      - name: 🛫 Set up Flyctl\n"
+            "        uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be # 1.5\n"
+            "      - name: 🛫 Install pinned flyctl",
+            1,
+        )
+        self.assertNotEqual(restored, build)
+        with self.assertRaises(AssertionError):
+            assert_flyctl_comes_from_github(self, restored)
+
+        # Second control: a drifting version in the asset name while the pin
+        # stays put would verify a checksum against the wrong file.
+        drifted = build.replace("flyctl_0.5.1_Linux_x86_64.tar.gz",
+                                "flyctl_0.5.2_Linux_x86_64.tar.gz", 1)
+        self.assertNotEqual(drifted, build)
+        with self.assertRaises(AssertionError):
+            assert_flyctl_comes_from_github(self, drifted)
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""

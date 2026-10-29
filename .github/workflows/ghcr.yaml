@@ -124,8 +124,27 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: 🛫 Set up Flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be # 1.5
+      # The action resolves `latest` through a Fly-hosted release manifest, so a
+      # control-plane 503 there fails the job before any retry can run (observed:
+      # run 40959357266, deploy died in this step). The tarball comes from the
+      # GitHub release instead and is pinned by sha256, so the toolchain no
+      # longer depends on the service it is about to touch.
+      - name: 🛫 Install pinned flyctl
+        env:
+          FLYCTL_VERSION: 0.5.1
+          FLYCTL_SHA256: 47803bc5dc3eb7c7a45626ff76f0082e8c5b5fb8b805efbe00469d04757e1b1b
+          FLYCTL_ASSET: flyctl_0.5.1_Linux_x86_64.tar.gz
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          url="https://github.com/superfly/flyctl/releases/download/v${FLYCTL_VERSION}/${FLYCTL_ASSET}"
+          curl --fail --silent --show-error --location --retry 3 --max-time 120 \
+            --output "$tmp/$FLYCTL_ASSET" "$url"
+          printf '%s  %s\n' "$FLYCTL_SHA256" "$tmp/$FLYCTL_ASSET" | sha256sum -c -
+          tar -xzf "$tmp/$FLYCTL_ASSET" -C "$tmp" flyctl
+          install -m 0755 "$tmp/flyctl" /usr/local/bin/flyctl
+          flyctl version
 
       - name: 🚀 Deploy the exact digest
         env:
