@@ -288,7 +288,10 @@ Authority: `Dockerfile` digest/sha arguments,
 
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`
 and `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base`; the
-deploy verifier carries its own control that deletes the digest comparison.
+deploy verifier carries its own control that deletes the digest comparison. The
+port invariant is controlled inside
+`tests/test_recurring_gate.py:test_listen_port_is_unprivileged_and_matches_fly`,
+which rewrites the listener back to 80 and drifts `internal_port` to 8081.
 
 Regression gate: the digest check rejects a mutable image, a tampered binary
 fails the build, the deploy job needs `build` which needs `validate`, the
