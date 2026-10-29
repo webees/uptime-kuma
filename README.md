@@ -97,7 +97,8 @@ the amd64 manifest digest, smoke-tests that digest, and only then deploys it.
 Deployment verification fails unless the latest release is complete, every
 machine runs that digest, and its health check is passing.
 
-Make `Validate` a required status check on `main` (see [Residual risk](#-residual-risk)).
+`Validate` is a required status check on `main`; a commit that fails it cannot
+merge (see [Residual risk](#-residual-risk)).
 
 ## 🛠️ Management & Operations
 
@@ -168,9 +169,11 @@ fails when a class, a field, or a mutation control disappears.
 
 ## ⚠️ Residual risk
 
-- `Validate` as a *required* status check on `main` is a repository setting, not
-  a file. Until it is switched on, `ghcr.yaml` runs the same gates but a direct
-  merge can still bypass them.
+- Branch protection on `main` requires the `validate` context and applies to
+  admins too (set through the API on 2026-10-29). The context has not yet been
+  observed on a real run, because no commit carrying `validate.yml` has reached
+  `main` yet; if the recorded check name differs, the rule must be renamed or
+  PRs block forever.
 - The image is only published and deployed from GitHub Actions; the first run of
   the digest-based deploy job is unverified until it executes on `main`.
 - Weekly rebuilds are not scheduled, so base-image security fixes need a manual
