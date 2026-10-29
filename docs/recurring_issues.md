@@ -296,6 +296,12 @@ which rewrites the listener back to 80 and drifts `internal_port` to 8081.
 A bare SHA is immutable but unreadable, so each pin also carries its release as
 a trailing comment; the same test deletes one comment while keeping the SHA,
 which only the readability rule can catch.
+The release path is also the only one Fly answers 5xx on independently of the
+commit (observed twice: `failed to create release (status 503)` while reads
+stayed healthy), so
+`tests/test_recurring_gate.py:test_deploy_retries_only_transient_errors` pins a
+bounded, digest-idempotent retry with a growing delay, a transient-only filter
+and a fail-closed last attempt.
 
 Regression gate: the digest check rejects a mutable image, a tampered binary
 fails the build, the deploy job needs `build` which needs `validate`, the
