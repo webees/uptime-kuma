@@ -257,8 +257,9 @@ exact amd64 manifest digest produced by a build that passed `validate`;
 `fly.toml` carries no image, and its `app` is the single recorded application
 name that CI resolves and passes as `-a` to both the deploy and the verifier.
 Every workflow action is pinned to a 40-character commit instead of a movable
-tag. Validation is a required check. Tracked files and reachable history carry
-no real domain, bucket, token, or machine identifier.
+tag, and keeps its release as a trailing comment so the pin stays reviewable.
+Validation is a required check. Tracked files and reachable history carry no
+real domain, bucket, token, or machine identifier.
 
 Builds publish provenance attestations. They land in the same index as
 `unknown/unknown` children, so the digest step filters on both architecture and
@@ -292,6 +293,9 @@ deploy verifier carries its own control that deletes the digest comparison. The
 port invariant is controlled inside
 `tests/test_recurring_gate.py:test_listen_port_is_unprivileged_and_matches_fly`,
 which rewrites the listener back to 80 and drifts `internal_port` to 8081.
+A bare SHA is immutable but unreadable, so each pin also carries its release as
+a trailing comment; the same test deletes one comment while keeping the SHA,
+which only the readability rule can catch.
 
 Regression gate: the digest check rejects a mutable image, a tampered binary
 fails the build, the deploy job needs `build` which needs `validate`, the
