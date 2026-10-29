@@ -240,6 +240,11 @@ Every workflow action is pinned to a 40-character commit instead of a movable
 tag. Validation is a required check. Tracked files and reachable history carry
 no real domain, bucket, token, or machine identifier.
 
+Builds publish provenance attestations. They land in the same index as
+`unknown/unknown` children, so the digest step filters on both architecture and
+OS and requires exactly one match; the deploy image therefore stays a real
+linux/amd64 image manifest, never an attestation.
+
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
 `.github/workflows/ghcr.yaml:digest`.
@@ -258,6 +263,9 @@ digest, a stopped machine, a critical, a missing or an unmatchable health check,
 a bad host, and an undeployed app all reject, while the matching one passes.
 Any non-SHA `uses:` reference fails with its `file:line`, and a single floating
 tag is enough to reproduce it.
+The digest filter requires both `amd64` and `linux` and an exactly-one result;
+removing the filter makes an unfiltered index (image plus attestation children)
+slip through the assertion.
 
 ## Simplification Rule
 

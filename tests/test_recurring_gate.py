@@ -162,6 +162,21 @@ def assert_actions_are_pinned(case: unittest.TestCase, workflows: dict[str, str]
         case.assertEqual(unpinned_uses(text), [], f"{name} has a mutable action reference")
 
 
+def assert_digest_names_one_image_manifest(case: unittest.TestCase, build: str) -> None:
+    """Provenance adds attestation children; the digest must stay the amd64 image."""
+    case.assertNotIn("provenance: false", build)
+    case.assertRegex(build, r"(?m)^\s*provenance: (true|mode=max)$")
+    step = build.split("Record the published amd64 digest")[1].split("Smoke test the published digest")[0]
+    # Both halves of the platform filter, so an attestation child (whose
+    # platform is `unknown/unknown`) can never be published as the digest.
+    case.assertIn('eq .Platform.Architecture "amd64"', step)
+    case.assertIn('eq .Platform.OS "linux"', step)
+    # Exactly one match is required rather than taking whatever comes back; an
+    # unfiltered index yields every child (image + attestation), which fails.
+    case.assertIn("wc -l)\" -eq 1", step)
+    case.assertIn('[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]', step)
+
+
 IMAGE = "ghcr.io/example/uptime-kuma@sha256:" + "a" * 64
 
 
@@ -316,6 +331,21 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError) as caught:
             assert_actions_are_pinned(self, weakened)
         self.assertIn("actions/checkout@v4", str(caught.exception))
+
+    def test_digest_cannot_resolve_to_an_attestation(self) -> None:
+        build = workflow("ghcr.yaml")
+        assert_digest_names_one_image_manifest(self, build)
+
+        # Mutation control: drop the whole platform filter, so the index hands
+        # back every child and the exactly-one check has to reject it.
+        loose = build.replace(
+            '{{if and (eq .Platform.Architecture "amd64") (eq .Platform.OS "linux")}}{{.Digest}}{{"\\n"}}{{end}}',
+            '{{.Digest}}{{"\\n"}}',
+            1,
+        )
+        self.assertNotEqual(loose, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_names_one_image_manifest(self, loose)
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""

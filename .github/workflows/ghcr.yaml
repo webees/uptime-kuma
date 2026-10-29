@@ -80,7 +80,9 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
-          provenance: false
+          # Attestations ride along as extra index entries; the digest step
+          # below still selects the plain linux/amd64 image manifest.
+          provenance: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -92,8 +94,13 @@ jobs:
           TAG: build-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          # Provenance adds attestation entries to the same index, so the
+          # platform filter is what keeps `--image` on a real image manifest:
+          # take the single linux/amd64 child and refuse anything else.
           digest="$(docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${TAG}" \
-            --format '{{range .Manifest.Manifests}}{{if eq .Platform.Architecture "amd64"}}{{.Digest}}{{end}}{{end}}')"
+            --format '{{range .Manifest.Manifests}}{{if and (eq .Platform.Architecture "amd64") (eq .Platform.OS "linux")}}{{.Digest}}{{"\n"}}{{end}}{{end}}' \
+            | sed '/^$/d')"
+          [ "$(printf '%s\n' "$digest" | wc -l)" -eq 1 ]
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
           echo "Published ${REGISTRY}/${IMAGE_NAME}:${TAG}@${digest}"
