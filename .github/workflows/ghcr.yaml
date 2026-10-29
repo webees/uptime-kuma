@@ -2,6 +2,11 @@ name: 🐳 Docker (Multi-Arch)
 
 on:
   workflow_dispatch: {}
+  # Weekly rebuild so base-image and OS-package security fixes ship without a
+  # code change. Scheduled runs use `main` HEAD and go through the same
+  # validate -> build -> deploy chain; only PR-only steps are skipped.
+  schedule:
+    - cron: '17 3 * * 1'
   push:
     branches:
       - main

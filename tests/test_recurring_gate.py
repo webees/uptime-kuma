@@ -177,6 +177,25 @@ def assert_digest_names_one_image_manifest(case: unittest.TestCase, build: str) 
     case.assertIn('[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]', step)
 
 
+def schedule_entries(text: str) -> list[str]:
+    """Return the `cron:` values declared under the top-level `on:` key."""
+    head = text.split("\nenv:", 1)[0]
+    return re.findall(r"^\s*-\s*cron:\s*'([^']+)'\s*$", head, re.MULTILINE)
+
+
+def assert_weekly_rebuild_is_scheduled(case: unittest.TestCase, build: str) -> None:
+    crons = schedule_entries(build)
+    case.assertEqual(len(crons), 1, "exactly one rebuild schedule is expected")
+    minute, hour, dom, month, dow = crons[0].split()
+    case.assertRegex(minute, r"^\d{1,2}$")
+    case.assertRegex(hour, r"^\d{1,2}$")
+    case.assertEqual(dom, "*", "a weekly rebuild must not pin a day of month")
+    case.assertEqual(month, "*")
+    case.assertEqual(dow, "1", "the rebuild must run once a week")
+    # A weekly schedule changes nothing if the chain is still gated on `main`.
+    case.assertIn("github.ref == 'refs/heads/main'", build)
+
+
 IMAGE = "ghcr.io/example/uptime-kuma@sha256:" + "a" * 64
 
 
@@ -346,6 +365,17 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(loose, build)
         with self.assertRaises(AssertionError):
             assert_digest_names_one_image_manifest(self, loose)
+
+    def test_weekly_rebuild_is_scheduled(self) -> None:
+        build = workflow("ghcr.yaml")
+        assert_weekly_rebuild_is_scheduled(self, build)
+
+        # Mutation control: a schedule that only ever rebuilds one day a month
+        # is not a weekly rebuild.
+        monthly = build.replace("    - cron: '17 3 * * 1'", "    - cron: '17 3 1 * *'", 1)
+        self.assertNotEqual(monthly, build)
+        with self.assertRaises(AssertionError):
+            assert_weekly_rebuild_is_scheduled(self, monthly)
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""

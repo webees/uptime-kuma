@@ -245,6 +245,10 @@ Builds publish provenance attestations. They land in the same index as
 OS and requires exactly one match; the deploy image therefore stays a real
 linux/amd64 image manifest, never an attestation.
 
+The publish workflow also carries one weekly `schedule`, so a base-image or
+OS-package fix can ship without a code change. Scheduled runs use `main` HEAD
+and traverse the same validate -> build -> deploy chain.
+
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
 `.github/workflows/ghcr.yaml:digest`.
@@ -266,6 +270,8 @@ tag is enough to reproduce it.
 The digest filter requires both `amd64` and `linux` and an exactly-one result;
 removing the filter makes an unfiltered index (image plus attestation children)
 slip through the assertion.
+Exactly one weekly cron entry is required with `* *` for day-of-month and month
+and `1` for day-of-week; turning it into a monthly rebuild fails.
 
 ## Simplification Rule
 
