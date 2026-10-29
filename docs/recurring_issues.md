@@ -234,8 +234,10 @@ and `.env` was committed. Each gap is closed in this round.
 Final decision: the base image is pinned by index digest and the downloaded
 scheduler by per-architecture sha256 verified before use. Deployment names the
 exact amd64 manifest digest produced by a build that passed `validate`;
-`fly.toml` carries no image. Validation is a required check. Tracked files and
-reachable history carry no real domain, bucket, token, or machine identifier.
+`fly.toml` carries no image, and its `app` is the single recorded application
+name that CI resolves and passes as `-a` to both the deploy and the verifier.
+Validation is a required check. Tracked files and reachable history carry no
+real domain, bucket, token, or machine identifier.
 
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
@@ -248,10 +250,11 @@ deploy verifier carries its own control that deletes the digest comparison.
 Regression gate: the digest check rejects a mutable image, a tampered binary
 fails the build, the deploy job needs `build` which needs `validate`, the
 published digest is the amd64 manifest, and the history scan stays clean. The
-two verifier filters are executed against fixture JSON: a stale release, an
-unfinished release, a stale machine digest, a stopped machine, a critical, a
-missing or an unmatchable health check, a bad host, and an undeployed app all
-reject, while the matching one passes.
+recorded app name matches the README and every `-a` in the deploy job, and
+renaming it in only one place fails. The two verifier filters are executed
+against fixture JSON: a stale release, an unfinished release, a stale machine
+digest, a stopped machine, a critical, a missing or an unmatchable health check,
+a bad host, and an undeployed app all reject, while the matching one passes.
 
 ## Simplification Rule
 
