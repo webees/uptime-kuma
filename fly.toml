@@ -18,7 +18,8 @@ method = "get"
 # Caddy answers this itself, so the probe survives a dead uptime-kuma and is
 # never subject to the CADDY_DOMAINS gate.
 path = "/health"
-port = 80
+# Must match the Caddyfile listener; Caddy is unprivileged, so not 80.
+port = 8080
 timeout = "5s"
 type = "http"
 
@@ -26,7 +27,8 @@ type = "http"
 auto_start_machines = true
 auto_stop_machines = false
 force_https = true
-internal_port = 80
+# Must match the Caddyfile listener. Port 80 fails with EACCES on Fly.
+internal_port = 8080
 min_machines_running = 1
 
   [http_service.concurrency]

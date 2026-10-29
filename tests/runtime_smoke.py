@@ -196,7 +196,7 @@ def proxy(
         "if [ -n \"$NORMALIZE\" ]; then . /entrypoint/config.sh; audit_addresses || exit 9; fi\n"
         "node /echo_srv.js & sleep 1\n"
         "{ caddy run --config /Caddyfile >/tmp/caddy.log 2>&1 & } ; caddy=$!\n"
-        "for _ in $(seq 1 100); do curl -s -o /dev/null http://127.0.0.1/ && break; sleep 0.2; done\n"
+        "for _ in $(seq 1 100); do curl -s -o /dev/null http://127.0.0.1:8080/ && break; sleep 0.2; done\n"
         f"{body}\n"
         "rc=$?; kill $caddy 2>/dev/null; [ \"$rc\" -eq 0 ] || tail -5 /tmp/caddy.log >&2; exit $rc"
     )
@@ -211,14 +211,14 @@ def proxy(
 
 def get(extra: str = "", path: str = "/") -> str:
     """One request; prints only the JSON header echo."""
-    return f"curl -sS --max-time 5 {extra} -H 'Host: allowed.example' http://127.0.0.1{path}; echo"
+    return f"curl -sS --max-time 5 {extra} -H 'Host: allowed.example' http://127.0.0.1:8080{path}; echo"
 
 
 def code(host: str, path: str = "/") -> str:
     """Status code for one host/path pair, appended to the batch record."""
     return (
         f"printf 'code=%s\\n' \"$(curl -sS --max-time 5 -o /dev/null -w '%{{http_code}}' "
-        f"-H 'Host: {host}' http://127.0.0.1{path} || :)\" >> /tmp/codes"
+        f"-H 'Host: {host}' http://127.0.0.1:8080{path} || :)\" >> /tmp/codes"
     )
 
 
@@ -255,7 +255,7 @@ def headers(host: str, path: str = "/") -> str:
     """Response headers for one host/path pair."""
     return (
         f"curl -sS --max-time 5 -o /dev/null -D - -H 'Host: {host}' "
-        f"http://127.0.0.1{path} | tr -d '\\r'"
+        f"http://127.0.0.1:8080{path} | tr -d '\\r'"
     )
 
 
@@ -1080,7 +1080,7 @@ def check_process_supervision(image: str) -> None:
         # The proxy must actually serve again, not merely exist.
         for _ in range(100):
             result = docker("exec", container, "curl", "-s", "-o", "/dev/null",
-                            "http://127.0.0.1/health", check=False)
+                            "http://127.0.0.1:8080/health", check=False)
             if result.returncode == 0:
                 break
             time.sleep(0.1)

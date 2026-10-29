@@ -249,6 +249,26 @@ def assert_validate_concurrency_is_distinct(case: unittest.TestCase, validate: s
     case.assertNotEqual(group, caller.group(1))
 
 
+def assert_listen_port_is_consistent_and_unprivileged(
+    case: unittest.TestCase, caddyfile: str, fly: str
+) -> None:
+    """Caddy runs as `node`, so a privileged port fails only on a real machine.
+
+    Fly's kernel refuses an unprivileged bind to :80 while a local Docker
+    Desktop sandbox allows it, so every local test stayed green and the first
+    real deploy timed out on a crash loop. The listener, `internal_port` and the
+    health-check port must be one unprivileged value.
+    """
+    listener = re.search(r"(?m)^:(\d+) \{$", caddyfile)
+    case.assertIsNotNone(listener, "the Caddyfile needs one explicit listener port")
+    port = int(listener.group(1))
+    case.assertGreater(port, 1024, "an unprivileged process cannot bind a privileged port")
+
+    parsed = tomllib.loads(fly)
+    case.assertEqual(parsed["http_service"]["internal_port"], port)
+    case.assertEqual(parsed["checks"]["health"]["port"], port)
+
+
 IMAGE = "ghcr.io/example/uptime-kuma@sha256:" + "a" * 64
 
 
@@ -486,6 +506,24 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(shared, validate)
         with self.assertRaises(AssertionError):
             assert_validate_concurrency_is_distinct(self, shared, build)
+
+    def test_listen_port_is_unprivileged_and_matches_fly(self) -> None:
+        caddyfile = (ROOT / "config/Caddyfile").read_text(encoding="utf-8")
+        fly = (ROOT / "fly.toml").read_text(encoding="utf-8")
+        assert_listen_port_is_consistent_and_unprivileged(self, caddyfile, fly)
+
+        # Mutation control 1: the observed failure, back on :80.
+        privileged = caddyfile.replace("\n:8080 {\n", "\n:80 {\n", 1)
+        self.assertNotEqual(privileged, caddyfile)
+        with self.assertRaises(AssertionError):
+            assert_listen_port_is_consistent_and_unprivileged(self, privileged, fly)
+
+        # Mutation control 2: internal_port drifting from the listener means the
+        # proxy never reaches Caddy even though everything starts.
+        drifted = fly.replace("internal_port = 8080", "internal_port = 8081", 1)
+        self.assertNotEqual(drifted, fly)
+        with self.assertRaises(AssertionError):
+            assert_listen_port_is_consistent_and_unprivileged(self, caddyfile, drifted)
 
 
 class RecurringMutationTest(unittest.TestCase):

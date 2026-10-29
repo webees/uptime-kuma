@@ -24,7 +24,12 @@
 }
 
 # ── Site Block ────────────────────────────────────────────────────────────────
-:80 {
+# Not :80. Caddy runs as `node` (the entrypoint drops privileges), and a Fly
+# machine's kernel refuses an unprivileged bind to port 80
+# (`listen tcp :80: bind: permission denied`), which crashes Caddy on a loop
+# while a local Docker Desktop sandbox happily allows it. 8080 is unprivileged;
+# `fly.toml` must name the same port in `internal_port` and the health check.
+:8080 {
 	encode zstd gzip
 
 	# Applied before routing so the 403 and the health answer carry them too.
