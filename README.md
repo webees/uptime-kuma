@@ -226,6 +226,9 @@ fails when a class, a field, or a mutation control disappears.
   `python3.13 scripts/branch_rule.py live.json` reports `rule matches` or
   `RULE DRIFT`. A check rename still has to land in both the live rule and the
   recorded copy, in that order, or every merge blocks.
+  The rule is `strict`: a branch behind `main` must update and re-run
+  `validate` before merging, so a green check never stands in for a test
+  against the commit that actually lands.
 - The image is only published and deployed from GitHub Actions, and a manual
   `fly deploy` still builds this Dockerfile and bypasses the digest gate. It no
   longer goes unnoticed: `deploy-drift` compares the machine image with the

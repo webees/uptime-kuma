@@ -325,6 +325,14 @@ def assert_required_check_is_a_job(case: unittest.TestCase, recorded: str, valid
         True,
         "admins must be bound too, or the rule is advisory",
     )
+    # `strict` requires the branch to be up to date before merging. Without it a
+    # green check on a stale base is enough: the merge lands untested against
+    # the commit it actually runs on.
+    case.assertIs(
+        document["required_status_checks"]["strict"],
+        True,
+        "a stale green must not satisfy the required check",
+    )
 
 
 def scan_for_sensitive_data(text: str) -> list[str]:
@@ -989,6 +997,14 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_required_check_is_a_job(self, json.dumps(advisory), validate)
 
+        # Mutation control 4: a non-strict rule accepts a green check that ran
+        # against an older base, so the merged commit is never re-validated.
+        stale = json.loads(recorded)
+        stale["required_status_checks"]["strict"] = False
+        with self.assertRaises(AssertionError) as caught:
+            assert_required_check_is_a_job(self, json.dumps(stale), validate)
+        self.assertIn("stale green", str(caught.exception))
+
     def test_recorded_rule_matches_the_live_rule(self) -> None:
         """The recorded copy is only useful if a reader compares it."""
         script = (ROOT / "scripts/branch_rule.py").read_text(encoding="utf-8")
@@ -996,7 +1012,7 @@ class RecurringContractTest(unittest.TestCase):
         self.assertIn("RULE DRIFT: ", script)
 
         live = {
-            "required_status_checks": {"contexts": ["validate"], "strict": False},
+            "required_status_checks": {"contexts": ["validate"], "strict": True},
             "enforce_admins": {"enabled": True},
         }
         same = compare_rule(self, live)
