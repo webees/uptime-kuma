@@ -97,7 +97,8 @@ One row per class, always these eight columns, in this order:
 
 - `History` is the `git log -S` / `git log -G` classification plus the commit
   it rests on — `unchanged, git log -Sx → abc1234`, `regressed by abcdef1`.
-  A bare `n/a` is not a classification and `validate` rejects it.
+  A bare `n/a` is not a classification and `validate` rejects it, as does a hash
+  that `git cat-file` cannot resolve.
 - `Authoritative guard` is one `path:symbol` pair and has to be one the class
   records under `Authority:`; `validate` rejects another path, a neighbour's
   symbol on a shared file, and a symbol that no longer occurs in that file. Two
@@ -106,7 +107,9 @@ One row per class, always these eight columns, in this order:
   run, and the row is only filled once that ran.
 - `Mutation control` names the runnable test or command in backticks and states
   what changed when the guard was removed. "5 controls" is a count, not a
-  location; a control that stays green proves nothing.
+  location; a control that stays green proves nothing. A backticked
+  `path:symbol` must still exist: a control in a deleted file or a deleted case
+  cannot be run.
 - `Observed result` quotes the actual output. Anything not run says `未验证`
   with the reason.
 

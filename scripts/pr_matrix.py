@@ -21,6 +21,7 @@ Exit codes: `0` complete, `1` a violation (named by line), `2` unreadable.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,10 +46,34 @@ SPAN = re.compile(r"`([^`]+)`")
 HISTORY = re.compile(r"\b(never fixed|never established|regressed|unchanged|partial(?:ly)?|not established)\b")
 COMMIT = re.compile(r"\b[0-9a-f]{7,40}\b")
 RUNNABLE = re.compile(r"`[^`]+`|\btests?/[^\s:]+:")
+# A control is only runnable if the file it names still exists; a `path:symbol`
+# is the protocol's spelling, so both halves are checked.
+REFERENCE = re.compile(r"`([\w./-]+):(\w[\w.-]*)`")
 
 
 class Unreadable(Exception):
     """The body has no matrix section to check."""
+
+
+def unresolved(hashes: list[str]) -> list[str]:
+    """The hashes git cannot turn into a commit, so the row cites a ghost."""
+    if not hashes:
+        return []
+    probe = "\n".join(f"{sha}^{{commit}}" for sha in hashes) + "\n"
+    done = subprocess.run(
+        ["git", "cat-file", "--batch-check"],
+        input=probe,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        raise Unreadable(f"git cat-file failed: {done.stderr.strip()}")
+    gone = []
+    for sha, answer in zip(hashes, done.stdout.splitlines()):
+        if answer.endswith(" missing"):
+            gone.append(sha)
+    return gone
 
 
 def classes(document: str) -> list[str]:
@@ -193,11 +218,33 @@ def check(
                 f"line {number}: {title!r} History needs a classification and "
                 f"the commit it rests on, not {history!r}"
             )
+        # A hash that does not resolve is worse than none: it reads as proof.
+        for sha in COMMIT.findall(history):
+            if sha in unresolved([sha]):
+                problems.append(
+                    f"line {number}: {title!r} History cites {sha}, which is not a commit"
+                )
         if control and not RUNNABLE.search(control):
             problems.append(
                 f"line {number}: {title!r} Mutation control names nothing "
                 f"runnable: {control!r}"
             )
+        # The control has to be runnable: a named file that is gone is a
+        # command nobody can type.
+        for path, symbol in REFERENCE.findall(control):
+            if not Path(path).is_file():
+                problems.append(
+                    f"line {number}: {title!r} Mutation control names missing "
+                    f"file {path}"
+                )
+            elif not re.search(
+                rf"(?<![\w-]){re.escape(symbol)}(?![\w-])",
+                Path(path).read_text(encoding="utf-8", errors="replace"),
+            ):
+                problems.append(
+                    f"line {number}: {title!r} Mutation control names "
+                    f"{symbol!r}, which is not in {path}"
+                )
         guard = found[COLUMNS.index("Authoritative guard")]
         if guard:
             for problem in guard_problems(title, guard, owned.get(title, [])):
