@@ -202,6 +202,17 @@ def assert_target_mode_is_actionable(
         "guard {guard!r} is not the recorded",
         (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"),
     )
+    # History and Mutation control are references, not free prose: a ghost
+    # hash or a deleted case reads exactly like proof.
+    case.assertIn("which is not a commit", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    case.assertIn("Mutation control names missing", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    # A commit that resolves is not enough: after a squash merge the branch
+    # commit is gone from `main`, so the row must cite something reachable.
+    case.assertIn("reachable from HEAD, so only the clone", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    # The protocol has to say so too, or the writer follows the old advice.
+    case.assertIn("`git cat-file` cannot resolve", found["Matrix"])
+    case.assertIn("not reachable from\n  `HEAD`", found["Matrix"])
+    case.assertIn("deleted file or a deleted case", found["Matrix"])
 
     # The rejection list is the thing that voids a round; a subset is not one.
     for clause in ("a matrix column or row is missing",
@@ -235,12 +246,40 @@ def assert_pr_template_carries_the_matrix(case: unittest.TestCase, template: str
 def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
     """A body whose matrix is fully filled, for parser tests."""
     rows = "\n".join(
-        f"| {title} | unchanged, `git log -Gx` → `abc1234` | "
+        f"| {title} | unchanged, `git log -Gx` → `dbf6c26` | "
         f"`{authority_guard(document, title)}` | ran | "
-        f"ran | ran | `tests/a.py:case` | {result} |"
+        f"ran | ran | `tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body` | {result} |"
         for title in target_classes(document)
     )
     return f"## Conclusion\n\nx\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n|{'---|' * len(TARGET_MODE_COLUMNS)}\n{rows}\n\n## Changes\n\nx\n"
+
+
+def dangling_commit() -> str:
+    """A commit object that exists but no branch points at.
+
+    `1ca77e4` is such a commit here, but a CI checkout only fetches what the
+    branch reaches, so naming it works on one machine and not the other. This
+    builds the condition locally: `git commit-tree` writes a real commit, then
+    drops the only name for it.
+    """
+    stamp = "2000-01-01T00:00:00Z"
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "round",
+        "GIT_AUTHOR_EMAIL": "round@example.org",
+        "GIT_AUTHOR_DATE": stamp,
+        "GIT_COMMITTER_NAME": "round",
+        "GIT_COMMITTER_EMAIL": "round@example.org",
+        "GIT_COMMITTER_DATE": stamp,
+    }
+    return subprocess.run(
+        ["git", "commit-tree", "HEAD^{tree}", "-m", "dangling"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
 
 
 def target_classes(document: str) -> list[str]:
@@ -1106,7 +1145,10 @@ class RecurringContractTest(unittest.TestCase):
 
         # Control: the writer advice reverts to the word that used to pass.
         vague_advice = mode.replace(
-            "A bare `n/a` is not a classification and `validate` rejects it.",
+            "A bare `n/a` is not a classification and `validate` rejects it, as does a hash\n"
+            "  that `git cat-file` cannot resolve or that resolves but is not reachable from\n"
+            "  `HEAD`: a squash merge drops the branch commit, so such a row only passes on\n"
+            "  the clone that still holds the branch.",
             "A bare `n/a` is accepted.",
             1,
         )
@@ -1330,13 +1372,54 @@ class RecurringContractTest(unittest.TestCase):
         for classification in ("never fixed", "never established", "regressed", "partial"):
             self.assertEqual(
                 run_matrix(
-                    replace_row(good, "History", f"{classification}, `git log -Sx` → `abc1234`"),
+                    replace_row(good, "History", f"{classification}, `git log -Sx` → `dbf6c26`"),
                     document,
                 ).returncode,
                 0,
             )
         self.assertEqual(
-            run_matrix(replace_row(good, "Mutation control", "`tests/a.py:case`"), document).returncode,
+            run_matrix(
+                replace_row(
+                    good,
+                    "Mutation control",
+                    "`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body`",
+                ),
+                document,
+            ).returncode,
+            0,
+        )
+        # A cited commit and a named control are only evidence if they still
+        # exist; `deadbee` and a deleted case both read as proof.
+        gone_hash = broken(replace_row(good, "History", "unchanged, `git log -Sx` → `deadbee`"))
+        self.assertIn("which is not a commit", gone_hash)
+        # A commit that resolves is not enough: after a squash merge CI sees a
+        # different main and the row fails there (#54). `1ca77e4` showed that,
+        # but only on the clone that still held it, so the case builds the
+        # condition instead of borrowing one machine's objects.
+        off_branch = broken(
+            replace_row(good, "History", f"unchanged, `git log -Sx` → `{dangling_commit()}`")
+        )
+        self.assertIn("not reachable from HEAD", off_branch)
+        gone_case = broken(
+            replace_row(
+                good,
+                "Mutation control",
+                # The name is split so the literal does not occur in this file
+                # and match itself.
+                "`tests/test_recurring_gate.py:{}`".format("test_" + "deleted_long_ago"),
+            )
+        )
+        self.assertIn("which is not in", gone_case)
+        gone_file = broken(
+            replace_row(good, "Mutation control", "`tests/gone.py:case`")
+        )
+        self.assertIn("names missing file tests/gone.py", gone_file)
+        # A control spelled without backticks still counts as runnable, so the
+        # reference check only applies to the backticked form.
+        self.assertEqual(
+            run_matrix(
+                replace_row(good, "Mutation control", "tests/a.py:case"), document
+            ).returncode,
             0,
         )
 
@@ -1350,6 +1433,47 @@ class RecurringContractTest(unittest.TestCase):
               '        history = found[1]\n        if False and not (HISTORY.search(history)')],
         )
         self.assertEqual(without_history.returncode, 0, without_history.stderr)
+
+        # Each new reference check is what rejects its ghost: blanking it lets
+        # the dead hash or the deleted case through again.
+        without_hash = run_mutated_matrix(
+            replace_row(good, "History", "unchanged, `git log -Sx` → `deadbee`"),
+            document,
+            # Blanking the whole lookup drops the ghost and the reachability
+            # probe together, so `deadbee` reads as a real commit again.
+            [("        cited = COMMIT.findall(history)", "        cited = []")],
+        )
+        self.assertEqual(without_hash.returncode, 0, without_hash.stderr)
+
+        # Reachability is a separate lookup from resolution: dropping only it
+        # brings back the off-branch commit, which the local clone still holds.
+        without_reach = run_mutated_matrix(
+            replace_row(good, "History", f"unchanged, `git log -Sx` → `{dangling_commit()}`"),
+            document,
+            [("        stale = set(unreachable(alive))", "        stale = set()")],
+        )
+        self.assertEqual(without_reach.returncode, 0, without_reach.stderr)
+
+        without_case = run_mutated_matrix(
+            replace_row(
+                good,
+                "Mutation control",
+                "`tests/test_recurring_gate.py:{}`".format("test_" + "deleted_long_ago"),
+            ),
+            document,
+            [('            elif not re.search(', '            elif False and not re.search(')],
+        )
+        self.assertEqual(without_case.returncode, 0, without_case.stderr)
+
+        # Without the existence test the read aborts, so the row is not named
+        # but the run still fails: `rc=2` rather than a message.
+        without_existing = run_mutated_matrix(
+            replace_row(good, "Mutation control", "`tests/gone.py:case`"),
+            document,
+            [("            if not Path(path).is_file():",
+              "            if False and not Path(path).is_file():")],
+        )
+        self.assertEqual(without_existing.returncode, 2)
 
         vague_control = replace_row(good, "Mutation control", "n/a")
         without_control = run_mutated_matrix(
