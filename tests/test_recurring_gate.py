@@ -254,6 +254,11 @@ def assert_matrix_gate_is_wired(case: unittest.TestCase, validate: str) -> None:
     # The body comes from the API, not from a checked-out file a PR can fake.
     case.assertIn("gh api", body)
     case.assertIn(".body", body)
+    # The changed files also come from the API; a class whose guard this PR
+    # edits cannot be excused with `未验证` while the diff sits right here.
+    case.assertIn("/files", body)
+    case.assertIn('--touched "${touched[@]}"', body)
+    case.assertIn('test -s "$RUNNER_TEMP/touched.txt"', body)
     # The audit gate runs in the same step and is measured against the base
     # commit, with the empty value refused rather than read as zero.
     case.assertIn("scripts/round_open.py --require-closed --entry", body)
@@ -443,7 +448,16 @@ def permissions_block(text: str) -> str:
     return "\n".join(lines)
 
 
-def run_matrix(body: str, document: str) -> subprocess.CompletedProcess[str]:
+def authority_path(document: str, title: str) -> str:
+    """The first file named in a class's `Authority:` line."""
+    block = document.split(f"\n## {title}\n", 1)[1].split("\n## ", 1)[0]
+    authority = block.split("\nAuthority: ", 1)[1].split("\n", 1)[0]
+    return re.search(r"`([^`:]+):", authority).group(1)
+
+
+def run_matrix(
+    body: str, document: str, touched: list[str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run the PR-matrix checker over a body and a class document."""
     with tempfile.TemporaryDirectory(prefix="pr-matrix-") as tmp:
         paths = []
@@ -451,8 +465,11 @@ def run_matrix(body: str, document: str) -> subprocess.CompletedProcess[str]:
             path = Path(tmp) / name
             path.write_text(text, encoding="utf-8")
             paths.append(str(path))
+        command = [sys.executable, str(ROOT / "scripts/pr_matrix.py"), *paths]
+        if touched is not None:
+            command += ["--touched", *touched]
         return subprocess.run(
-            [sys.executable, str(ROOT / "scripts/pr_matrix.py"), *paths],
+            command,
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -1109,6 +1126,28 @@ class RecurringContractTest(unittest.TestCase):
         reasoned = complete_body(document, result="未验证 — no Docker here")
         self.assertEqual(run_matrix(reasoned, document).returncode, 0)
 
+        # An unverified row is legal, but it hides the class behind a wall of
+        # green: nothing says which classes this round touched, so every
+        # unverified one looks equally uninvolved.
+        unverified_many = complete_body(document, result="未验证 — no Docker here")
+        self.assertEqual(run_matrix(unverified_many, document).returncode, 0)
+
+        # A class whose guard this PR edits cannot be excused with `未验证`:
+        # the reader has the diff in hand and nobody else will look again.
+        touched = authority_path(document, target_classes(document)[0])
+        self.assertIn(
+            "touches its authority",
+            run_matrix(unverified_many, document, touched=[touched]).stderr,
+        )
+        # A file nobody names as authority excuses nothing.
+        self.assertEqual(
+            run_matrix(unverified_many, document, touched=["README.md"]).returncode, 0
+        )
+        # `--touched` with no path is a mistake, not "nothing touched".
+        self.assertEqual(
+            run_matrix(good, document, touched=[]).returncode, 2
+        )
+
         # Mutation control 4: a ninth-but-wrong column shifts every cell.
         widened = good.replace(
             f"| {' | '.join(TARGET_MODE_COLUMNS)} |",
@@ -1155,8 +1194,9 @@ class RecurringContractTest(unittest.TestCase):
             assert_caller_grants_the_called_permissions(self, narrowed, validate)
 
         # Mutation control: a step that checks a checked-out file instead of the
-        # API body lets the PR carry a table nobody read.
-        local = validate.replace("gh api", "cat", 1)
+        # API body lets the PR carry a table nobody read. Both reads are API
+        # reads now, so the control has to move every one of them.
+        local = validate.replace("gh api", "cat")
         self.assertNotEqual(local, validate)
         with self.assertRaises(AssertionError):
             assert_matrix_gate_is_wired(self, local)
@@ -1185,6 +1225,20 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(unset, validate)
         with self.assertRaises(AssertionError):
             assert_matrix_gate_is_wired(self, unset)
+
+        # Mutation control: the matrix is checked without the changed files, so
+        # `未验证` passes on the very class the diff edits.
+        blind = validate.replace(' --touched "${touched[@]}"', "", 1)
+        self.assertNotEqual(blind, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, blind)
+
+        # Mutation control: an empty file list reaches the script as no paths,
+        # which it refuses — so the step must prove the file is not empty.
+        empty = validate.replace('          test -s "$RUNNER_TEMP/touched.txt"\n', "", 1)
+        self.assertNotEqual(empty, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, empty)
 
     def test_contract_mutation_removes_authoritative_field(self) -> None:
         text = DOC.read_text(encoding="utf-8")

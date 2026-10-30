@@ -96,7 +96,14 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq .body \
             > "$RUNNER_TEMP/body.md"
           test -s "$RUNNER_TEMP/body.md"
-          python3 scripts/pr_matrix.py "$RUNNER_TEMP/body.md" docs/recurring_issues.md
+          # The files come from the API too: a class whose guard this PR edits
+          # may not be excused with `未验证` while the diff sits right here.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" \
+            --jq '.[].filename' > "$RUNNER_TEMP/touched.txt"
+          test -s "$RUNNER_TEMP/touched.txt"
+          mapfile -t touched < "$RUNNER_TEMP/touched.txt"
+          python3 scripts/pr_matrix.py "$RUNNER_TEMP/body.md" \
+            docs/recurring_issues.md --touched "${touched[@]}"
           # The audit baseline must already reach the branch this PR lands on.
           # The round's own commits stay past the baseline by design: the
           # matrix above is their evidence. Only the PR path carries a base,

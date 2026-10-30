@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `16dd826` on 2026-10-31,
-extending the previous baseline at `d0190f4`. Every later round must extend that
+Audit baseline: every commit reachable through `0bbfb53` on 2026-10-31,
+extending the previous baseline at `16dd826`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -59,6 +59,11 @@ Reporting the owed count was advisory before: a round could read it, merge
 anyway and hand the debt onward. The gate is what makes the baseline a rule.
 The count past `HEAD` is not the gate, because the round's own commits are
 always past the baseline by design.
+
+`未验证` with a reason stays legal, except on a class whose `Authority:` file
+the pull request itself edits: `validate` passes the changed file list to
+`scripts/pr_matrix.py --touched` and that row must carry a real observation.
+The diff is the one chance to check that guard.
 
 ## Every-Round Goal Gate
 
