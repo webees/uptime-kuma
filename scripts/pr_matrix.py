@@ -39,6 +39,12 @@ COLUMNS = (
 UNVERIFIED = re.compile(r"^(未验证|n/a)\b")
 FRONT_MATTER = {"Target-Mode Prompt", "Every-Round Goal Gate"}
 AUTHORITY = re.compile(r"`([^`:]+):")
+# `History` and `Mutation control` are prose columns a row can satisfy with a
+# word. History must carry its classification *and* the commit that supports
+# it; a control must name something runnable, not assert one exists.
+HISTORY = re.compile(r"\b(never fixed|never established|regressed|unchanged|partial(?:ly)?|not established)\b")
+COMMIT = re.compile(r"\b[0-9a-f]{7,40}\b")
+RUNNABLE = re.compile(r"`[^`]+`|\btests?/[^\s:]+:")
 
 
 class Unreadable(Exception):
@@ -123,6 +129,17 @@ def check(
                 problems.append(f"line {number}: {title!r} has no observed result")
             else:
                 problems.append(f"line {number}: {title!r} leaves {column} empty")
+        history, control = found[COLUMNS.index("History")], found[COLUMNS.index("Mutation control")]
+        if history and not (HISTORY.search(history) and COMMIT.search(history)):
+            problems.append(
+                f"line {number}: {title!r} History needs a classification and "
+                f"the commit it rests on, not {history!r}"
+            )
+        if control and not RUNNABLE.search(control):
+            problems.append(
+                f"line {number}: {title!r} Mutation control names nothing "
+                f"runnable: {control!r}"
+            )
         if found[-1] and UNVERIFIED.match(found[-1]) and len(found[-1].split()) < 3:
             problems.append(f"line {number}: {title!r} says 未验证 without a reason")
         if touched and found[-1] and UNVERIFIED.match(found[-1]):
