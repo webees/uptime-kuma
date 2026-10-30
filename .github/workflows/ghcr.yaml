@@ -64,7 +64,6 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=build-${{ github.run_id }}-${{ github.run_attempt }}
-            type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=ref,event=branch
             type=ref,event=tag
@@ -117,6 +116,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      packages: write
     steps:
       # fly.toml carries no image, so the digest is the only source of truth.
       - name: 📥 Checkout repository
@@ -145,6 +145,23 @@ jobs:
           tar -xzf "$tmp/$FLYCTL_ASSET" -C "$tmp" flyctl
           install -m 0755 "$tmp/flyctl" /usr/local/bin/flyctl
           flyctl version
+
+      # Registry login is only needed for the promotion below, not for the
+      # deploy itself, so it stays in front of the step that pushes.
+      # `imagetools` is part of buildx; set up the same pinned action the build
+      # job uses instead of assuming a runner-local plugin version.
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+          use: true
+
+      - name: 🔐 Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 🚀 Deploy the exact digest
         env:
@@ -220,3 +237,48 @@ jobs:
           done
           echo "::error::deployment verification failed" >&2
           exit 1
+
+      # `latest` is what a human or a `fly deploy` without `--image` picks up,
+      # so it must never move ahead of the gates. The build metadata publishes
+      # only the run tag; this step promotes that exact index after the digest
+      # smoke test and the deployment verification have both passed.
+      - name: ⬆️ Promote the verified image to latest
+        env:
+          AMD64_DIGEST: ${{ needs.build.outputs.digest }}
+          TAG: build-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          docker buildx version
+          [[ "$AMD64_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::verified amd64 digest is missing or malformed" >&2
+            exit 1
+          }
+          image="${REGISTRY}/${IMAGE_NAME}"
+          # The run tag is the only reference carrying the attestations, so the
+          # index digest is read from it and its amd64 child must be the digest
+          # that was smoke-tested and deployed.
+          index_digest="$(timeout 120 docker buildx imagetools inspect "${image}:${TAG}" \
+            --format '{{.Manifest.Digest}}')"
+          [[ "$index_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::published index digest is missing or malformed" >&2
+            exit 1
+          }
+          index_amd64="$(timeout 120 docker buildx imagetools inspect "${image}:${TAG}" \
+            --format '{{range .Manifest.Manifests}}{{if and (eq .Platform.Architecture "amd64") (eq .Platform.OS "linux")}}{{.Digest}}{{end}}{{end}}')"
+          if [ "$index_amd64" != "$AMD64_DIGEST" ]; then
+            echo "::error::the run tag no longer carries the verified amd64 digest" >&2
+            exit 1
+          fi
+          timeout 120 docker buildx imagetools create \
+            --tag "${image}:latest" "${image}@${index_digest}"
+          # Retagging is not promotion: re-read `latest` and prove both the
+          # index and its amd64 child still name the verified build.
+          latest_index="$(timeout 120 docker buildx imagetools inspect "${image}:latest" \
+            --format '{{.Manifest.Digest}}')"
+          latest_amd64="$(timeout 120 docker buildx imagetools inspect "${image}:latest" \
+            --format '{{range .Manifest.Manifests}}{{if and (eq .Platform.Architecture "amd64") (eq .Platform.OS "linux")}}{{.Digest}}{{end}}{{end}}')"
+          if [ "$latest_index" != "$index_digest" ] || [ "$latest_amd64" != "$AMD64_DIGEST" ]; then
+            echo "::error::latest does not reference the verified image" >&2
+            exit 1
+          fi
+          echo "promoted ${image}:latest -> ${index_digest} (amd64 ${AMD64_DIGEST})"

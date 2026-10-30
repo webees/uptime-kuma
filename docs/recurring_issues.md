@@ -285,6 +285,15 @@ The publish workflow also carries one weekly `schedule`, so a base-image or
 OS-package fix can ship without a code change. Scheduled runs use `main` HEAD
 and traverse the same validate -> build -> deploy chain.
 
+Publication history: the metadata step used to write `latest` before the image
+existed, so the mutable tag moved even when the digest smoke test, the deploy,
+or the readiness verification failed; a cancelled run left it on an unverified
+image. Final decision: the metadata step publishes only
+`build-<run>-<attempt>`. Once the deployment verification passes, that exact
+index is retagged as `latest` and re-read, and both the index digest and its
+linux/amd64 child must still equal the recorded values. A failed, cancelled, or
+unverified build therefore leaves `latest` on the last verified image.
+
 Pruning cannot be left to a bare cron either: GitHub disables a scheduled
 workflow after a long quiet period (observed state: `disabled_inactivity`), so
 the package grows without bound while the job looks configured. Cleanup
@@ -302,9 +311,10 @@ Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
 `.github/workflows/ghcr.yaml:digest`.
 
-Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`
-and `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base`; the
-deploy verifier carries its own control that deletes the digest comparison. The
+Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
+`tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
+`tests/test_recurring_gate.py:test_latest_is_promoted_only_after_verification`;
+the deploy verifier carries its own control that deletes the digest comparison. The
 port invariant is controlled inside
 `tests/test_recurring_gate.py:test_listen_port_is_unprivileged_and_matches_fly`,
 which rewrites the listener back to 80 and drifts `internal_port` to 8081.
@@ -341,6 +351,9 @@ removing the filter makes an unfiltered index (image plus attestation children)
 slip through the assertion.
 Exactly one weekly cron entry is required with `* *` for day-of-month and month
 and `1` for day-of-week; turning it into a monthly rebuild fails.
+`latest` may not appear in the build metadata, promotion must follow the
+verifier, and a re-read mismatch on either the index digest or the amd64 child
+must fail; re-adding the metadata tag or dropping the comparison each turns red.
 Cleanup must keep exactly one cron entry, keep the `main` push trigger, share
 the publish concurrency group with `cancel-in-progress: false`, and hold an
 `older-than` window of at least 7 days plus a `keep-n-tagged` floor. Dropping

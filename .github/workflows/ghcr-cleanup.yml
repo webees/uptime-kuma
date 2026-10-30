@@ -36,8 +36,8 @@ jobs:
           delete-untagged: true
           # A `build-<run>-<attempt>` tag is what the publish workflow records
           # the digest from; keeping a week covers a stalled deploy review while
-          # still bounding the package. `latest` is never older than the last
-          # build, so it outlives this window on its own.
+          # still bounding the package. `latest` is only moved by a verified
+          # deploy, so it survives this window on its own.
           older-than: 7 days
           keep-n-tagged: 10
           delete-ghost-images: true

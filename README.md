@@ -97,6 +97,11 @@ the amd64 manifest digest, smoke-tests that digest, and only then deploys it.
 Deployment verification fails unless the latest release is complete, every
 machine runs that digest, and its health check is passing.
 
+Only after that verification passes is that exact index promoted to `latest`
+and re-read to prove both the index and its amd64 child still match. A failed,
+cancelled, or unverified build therefore leaves `latest` on the last good
+image; `latest` is a convenience reference, never the deploy input.
+
 `Validate` is a required status check on `main`; a commit that fails it cannot
 merge (see [Residual risk](#-residual-risk)).
 
