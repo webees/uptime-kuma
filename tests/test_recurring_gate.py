@@ -176,11 +176,14 @@ def assert_target_mode_is_actionable(
     case.assertIn('" | ".join(COLUMNS)', round_open, "the template is never printed")
 
     # The written count went stale on its own merge, so the baseline is a
-    # commit the script must resolve and count past.
+    # commit the script must resolve and count past — and, since a hash is
+    # cheap, prove descends from the baseline it names as its predecessor.
     case.assertRegex(issues, r"(?m)^Audit baseline: every commit reachable through `[0-9a-f]{7,40}`")
+    case.assertRegex(issues, r"extending the previous baseline at `[0-9a-f]{7,40}`")
     case.assertIn('"rev-parse", "--verify", f"{baseline}^{{commit}}"', round_open)
     case.assertIn('f"{baseline}..HEAD"', round_open)
     case.assertIn("commits past the baseline, to audit this round", round_open)
+    case.assertIn('"merge-base", "--is-ancestor", previous, baseline', round_open)
 
     # The rejection list is the thing that voids a round; a subset is not one.
     for clause in ("a matrix column or row is missing",
@@ -1027,6 +1030,20 @@ class RecurringContractTest(unittest.TestCase):
         )
         with self.assertRaises(AssertionError):
             assert_residuals_live_in_one_place(self, homeless)
+
+        # Fifth control: the baseline keeps its hash but drops its predecessor,
+        # so the chain can be restarted anywhere with nothing to compare.
+        chained = issues.replace("extending the previous baseline at `", "after `", 1)
+        self.assertNotEqual(chained, issues)
+        with self.assertRaises(AssertionError):
+            assert_target_mode_is_actionable(self, mode, chained, round_open)
+
+        # Sixth control: the lineage check is dropped from the script only, so
+        # the predecessor is recorded and never compared.
+        unchecked = round_open.replace('"merge-base", "--is-ancestor", previous, baseline', '"rev-parse", "HEAD"', 1)
+        self.assertNotEqual(unchecked, round_open)
+        with self.assertRaises(AssertionError):
+            assert_target_mode_is_actionable(self, mode, issues, unchecked)
 
     def test_pr_template_carries_the_matrix(self) -> None:
         """A required section that is not prefilled is the one that gets skipped."""

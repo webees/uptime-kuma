@@ -14,6 +14,13 @@ enforcement — a round can read "1" and merge anyway, which is exactly how the
 baseline grew stale before. The PR path runs this form against the pull
 request's base commit.
 
+Moving the baseline forward is the round's own debt, and a commit hash is
+cheap: a round can paste any newer hash and the gap closes without anything
+having been audited. The baseline line therefore names the baseline it
+supersedes, and the script refuses one that does not descend from it. A
+missing or unrelated predecessor exits `4`, so the chain cannot be restarted
+or forked to make the gate green.
+
 Two distances are reported because they mean different things. Everything past
 the baseline up to `HEAD` is what the round still has to audit, and it is never
 zero inside a pull request: the round's own commits are past the baseline and
@@ -47,6 +54,7 @@ COLUMNS = (
 )
 FRONT_MATTER = {"Target-Mode Prompt", "Every-Round Goal Gate"}
 BASELINE = re.compile(r"^Audit baseline: every commit reachable through `([0-9a-f]{7,40})`", re.MULTILINE)
+PREVIOUS = re.compile(r"extending the previous baseline at `([0-9a-f]{7,40})`")
 USAGE = "usage: round_open.py [--require-closed [--entry REF]]"
 
 
@@ -91,6 +99,24 @@ def audit(baseline: str, entry: str | None) -> tuple[str, str, str | None]:
         owed,
         _git("rev-list", "--count", f"{baseline}..{entry}"),
     )
+
+
+def lineage(baseline: str, previous: str) -> None:
+    """The baseline must continue the one it claims to extend.
+
+    A hash alone proves nothing about what was read: pasting a newer commit
+    closes the gap exactly as well as auditing one. Requiring descent at least
+    stops a baseline restarted elsewhere, which would silently drop the
+    commits in between from every later round.
+    """
+    try:
+        _git("rev-parse", "--verify", f"{previous}^{{commit}}")
+        _git("merge-base", "--is-ancestor", previous, baseline)
+    except Unreadable as error:
+        raise Unreadable(
+            f"baseline {baseline} does not descend from the previous baseline "
+            f"{previous}: {error}"
+        ) from error
 
 
 def classes(text: str) -> list[str]:
@@ -142,8 +168,20 @@ def main(argv: list[str]) -> int:
         print("docs/recurring_issues.md carries no audit baseline", file=sys.stderr)
         return 1
     baseline = match.group(1)
+    # Scoped to the baseline paragraph: a hash quoted further down the file
+    # would otherwise pass as the predecessor.
+    paragraph = text[match.end():].split("\n## ", 1)[0]
+    previous = PREVIOUS.search(paragraph)
+    if previous is None:
+        print(
+            "docs/recurring_issues.md names no previous baseline, so the "
+            "baseline chain cannot be checked",
+            file=sys.stderr,
+        )
+        return 4
     try:
         total, owed, gap = audit(baseline, entry)
+        lineage(baseline, previous.group(1))
     except Unreadable as error:
         print(f"cannot read the baseline: {error}", file=sys.stderr)
         return 2
@@ -155,6 +193,7 @@ def main(argv: list[str]) -> int:
     print(f"- baseline commit: `{baseline}`")
     print(f"- commits reachable from HEAD: {total}")
     print(f"- commits past the baseline, to audit this round: {owed}")
+    print(f"- baseline extends `{previous.group(1)}`")
     if gap is not None:
         print(f"- unaudited commits already on `{entry}`, which this round cannot cover: {gap}")
     print()

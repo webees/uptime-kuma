@@ -59,8 +59,14 @@ OWED = subprocess.run(
 ).stdout.strip()
 
 
-def doc(baseline: str | None) -> str:
-    line = "" if baseline is None else f"Audit baseline: every commit reachable through `{baseline}` on a day.\n"
+def doc(
+    baseline: str | None, previous: str | None = BASE
+) -> str:
+    """A real baseline paragraph, including the one it claims to extend."""
+    if baseline is None:
+        return "# Issues\n\n## Host Policy\n\n### body\n"
+    at = "" if previous is None else f", extending the previous baseline at `{previous}`"
+    line = f"Audit baseline: every commit reachable through `{baseline}` on a day{at}.\n"
     return f"# Issues\n\n{line}\n## Host Policy\n\n### body\n"
 
 
@@ -171,6 +177,45 @@ class RoundOpenTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("entry", result.stderr)
 
+    def test_baseline_must_descend_from_the_previous_one(self) -> None:
+        """Boundary: the ordinary case, a baseline further along the same line."""
+        result = run(doc(HEAD, BASE))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"- baseline extends `{BASE}`", result.stdout)
+
+    def test_baseline_may_equal_the_previous_one(self) -> None:
+        """A round that audits nothing still records the chain unchanged."""
+        self.assertEqual(run(doc(BASE, BASE)).returncode, 0)
+
+    def test_baseline_missing_its_predecessor_exits_four(self) -> None:
+        """A bare hash proves nothing about what was read, so it is refused
+        even though the gate itself would pass."""
+        result = run(doc(BASE, None), SCRIPT, "--require-closed", "--entry", BASE)
+        self.assertEqual(result.returncode, 4, result.stdout)
+        self.assertIn("no previous baseline", result.stderr)
+
+    def test_baseline_forked_off_the_chain_is_refused(self) -> None:
+        """The exact hole: paste an unrelated newer hash and the gap closes
+        without auditing a single commit, so the commons in between never get
+        a row."""
+        result = run(doc(BASE, HEAD), SCRIPT, "--require-closed", "--entry", BASE)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("does not descend from the previous baseline", result.stderr)
+
+    def test_unresolvable_predecessor_fails_closed(self) -> None:
+        result = run(doc(BASE, "0" * 40), SCRIPT, "--require-closed", "--entry", BASE)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("does not descend", result.stderr)
+
+    def test_predecessor_further_down_the_file_is_not_used(self) -> None:
+        """The chain must be read from the baseline paragraph, not from the
+        first hash in the file that happens to follow those words."""
+        document = doc(BASE, None) + (
+            f"\n## Later\n\nHistory: extending the previous baseline at `{BASE}`.\n"
+        )
+        result = run(document)
+        self.assertEqual(result.returncode, 4, result.stdout)
+
 
 class RoundOpenMutationTest(unittest.TestCase):
     """Remove the derivation in turn; the count stops meaning anything."""
@@ -181,7 +226,11 @@ class RoundOpenMutationTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def mutate(
-        self, *replacements: tuple[str, str], baseline: str = BASE, args: tuple[str, ...] = ()
+        self,
+        *replacements: tuple[str, str],
+        baseline: str = BASE,
+        previous: str | None = BASE,
+        args: tuple[str, ...] = (),
     ) -> subprocess.CompletedProcess[str]:
         text = self.source
         for old, new in replacements:
@@ -189,7 +238,7 @@ class RoundOpenMutationTest(unittest.TestCase):
             text = text.replace(old, new, 1)
         script = Path(self.tmp.name) / "mutated.py"
         script.write_text(text, encoding="utf-8")
-        return run(doc(baseline), script, *args)
+        return run(doc(baseline, previous), script, *args)
 
     def test_without_the_gate_the_open_round_exits_zero(self) -> None:
         """Mutation control for the gate itself: drop the exit code, not the count."""
@@ -219,6 +268,38 @@ class RoundOpenMutationTest(unittest.TestCase):
             args=("--require-closed", "--entry", BASE),
         )
         self.assertEqual(result.returncode, 3, result.stdout)
+
+    def test_without_the_lineage_check_any_hash_is_a_baseline(self) -> None:
+        """Mutation control for the chain: make the check pass unconditionally.
+
+        The fork case is the one that matters — a hash from another line closes
+        the gap exactly as well as an audited one, so the gate stays green
+        while the commits in between are never given a row.
+        """
+        forked = self.mutate(
+            ('_git("merge-base", "--is-ancestor", previous, baseline)', "''"),
+            baseline=BASE,
+            previous=HEAD,
+        )
+        self.assertEqual(forked.returncode, 0, forked.stderr)
+
+        unlinked = self.mutate(
+            ("        lineage(baseline, previous.group(1))\n", ""),
+            ("            file=sys.stderr,\n        )\n        return 4\n",
+             "            file=sys.stderr,\n        )\n"),
+        )
+        self.assertEqual(unlinked.returncode, 0, unlinked.stderr)
+
+    def test_lineage_compared_the_wrong_way_round_is_refused(self) -> None:
+        """Mutation control: swap the two hashes so ancestry is checked
+        backwards — a legitimate forward baseline then looks forked."""
+        reversed_ = self.mutate(
+            ('_git("merge-base", "--is-ancestor", previous, baseline)',
+             '_git("merge-base", "--is-ancestor", baseline, previous)'),
+            baseline=HEAD,
+            previous=BASE,
+        )
+        self.assertEqual(reversed_.returncode, 2, reversed_.stdout)
 
     def test_without_the_baseline_lookup_nothing_is_owed(self) -> None:
         """Left alone, the range falls back to all of `HEAD`."""
