@@ -231,6 +231,63 @@ def step_script(workflow_text: str, name: str) -> str:
     return block.split("- name:", 1)[0].split("run: |\n", 1)[1]
 
 
+PUSH_IGNORABLE = {
+    ".gitignore",
+    "README.md",
+    "LICENSE",
+    ".github/**",
+    "docs/**",
+    "tests/**",
+    "scripts/rebuild.sh",
+}
+
+
+def push_paths_ignore(build: str) -> set[str]:
+    """Return the paths excluded from the deploy trigger."""
+    section = build.split("\n  push:\n", 1)[1].split("\n  schedule:\n", 1)[0]
+    block = section.split("    paths-ignore:\n", 1)
+    if len(block) != 2:
+        return set()
+    return set(re.findall(r"^      - (\S+)$", block[1], re.MULTILINE))
+
+
+def assert_docs_do_not_rebuild(
+    case: unittest.TestCase, build: str, dockerfile: str, ignore: str
+) -> None:
+    """A docs edit cannot change the image, yet it rebuilt and redeployed.
+
+    Ignoring a path the Dockerfile copies would turn a real change into a silent
+    no-deploy, so the ignored set is checked against the build inputs: every
+    ignored path must be absent from the context, and every copy source must
+    stay triggerable.
+    """
+    ignored = push_paths_ignore(build)
+    case.assertEqual(ignored, PUSH_IGNORABLE, "the ignored set drifted")
+
+    for production in ("Dockerfile", "fly.toml", "config/**", "scripts/entrypoint/**",
+                       "scripts/entrypoint.sh", "scripts/restic.sh", "scripts/services.sh",
+                       ".dockerignore"):
+        case.assertNotIn(production, ignored, f"{production} is a production input")
+
+    copies = [line for line in dockerfile.splitlines() if line.startswith(("COPY ", "ADD "))]
+    case.assertTrue(copies, "the Dockerfile must have been parsed")
+    for copy in copies:
+        for source in copy.split()[1:-1]:
+            if "*" in source or source in (".", "./"):
+                continue
+            case.assertNotIn(source.rstrip("/"), ignored, f"the Dockerfile copies {source}")
+
+    # Only paths the build context already dropped may be ignored; a `/**`
+    # suffix is the same exclusion as the bare directory name.
+    dropped = {
+        line.strip().removesuffix("/**")
+        for line in ignore.splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+    for path in ignored:
+        case.assertIn(path.removesuffix("/**"), dropped, f"{path} is not in .dockerignore")
+
+
 def assert_latest_follows_verification(case: unittest.TestCase, build: str) -> None:
     """A mutable `latest` published by the build is not a verified reference.
 
@@ -730,6 +787,33 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(monthly, build)
         with self.assertRaises(AssertionError):
             assert_weekly_rebuild_is_scheduled(self, monthly)
+
+    def test_docs_only_changes_skip_the_production_build(self) -> None:
+        """Bumping a doc must not cost a build, a deploy and a `latest` move."""
+        build = workflow("ghcr.yaml")
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        ignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+        assert_docs_do_not_rebuild(self, build, dockerfile, ignore)
+
+        # Mutation control: drop the filter and every docs merge rebuilds again.
+        unfiltered = build.replace("    paths-ignore:\n", "    branches-ignore:\n", 1)
+        self.assertNotEqual(unfiltered, build)
+        with self.assertRaises(AssertionError):
+            assert_docs_do_not_rebuild(self, unfiltered, dockerfile, ignore)
+
+        # Second control: ignore an input the image is built from. The image
+        # silently stops rebuilding when only that file changes.
+        script = build.replace("      - tests/**\n", "      - tests/**\n      - scripts/services.sh\n", 1)
+        self.assertNotEqual(script, build)
+        with self.assertRaises(AssertionError):
+            assert_docs_do_not_rebuild(self, script, dockerfile, ignore)
+
+        # Third control: keep the filter but ignore something the build context
+        # really needs, so the two lists disagree in the other direction.
+        context = ignore.replace("tests\n", "", 1)
+        self.assertNotEqual(context, ignore)
+        with self.assertRaises(AssertionError):
+            assert_docs_do_not_rebuild(self, build, dockerfile, context)
 
     def test_latest_is_promoted_only_after_verification(self) -> None:
         """A failed build must leave the mutable tag on the last good image."""
