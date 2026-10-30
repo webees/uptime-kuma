@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `5a0d40c` on 2026-10-30,
-extending the previous baseline at `851f936`. Every later round must extend that
+Audit baseline: every commit reachable through `62b456d` on 2026-10-30,
+extending the previous baseline at `5a0d40c`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it and prints how far `HEAD` has moved past the baseline.
@@ -401,6 +401,13 @@ every recorded context against the real jobs, and
 `scripts/branch_rule.py` over a live payload; renaming the job, mis-titling the
 workflow, unbinding admins, emptying the list, or dropping a field each turns
 red.
+`validate.yml` is reachable two ways — standalone, and called from the publish
+workflow — so a scope it declares must also be granted by the caller. Asking for
+`pull-requests: read` inside the called file alone killed the whole publish with
+`startup_failure`, zero jobs, while the PR-only run stayed green (run
+`41080321915`). `tests/test_recurring_gate.py:test_caller_grants_every_permission_validate_asks_for`
+compares the two blocks, and both the missing block and the missing scope turn
+red.
 The release path is also the only one Fly answers 5xx on independently of the
 commit (observed twice: `failed to create release (status 503)` while reads
 stayed healthy), so
@@ -455,6 +462,8 @@ and admins must stay bound. Renaming the job, mis-titling the workflow,
 unbinding admins, emptying the context list, or dropping a field from the live
 payload each fails on its own control. `strict` must be `true`: recording it as
 `false` passes a stale green and fails on its own control.
+Every permission `validate.yml` declares must appear in the calling job's block;
+a scope added only to the called file is a `startup_failure`, not a red check.
 The Caddyfile listener must be above 1024 and equal to both
 `http_service.internal_port` and `checks.health.port`; moving the listener back
 to 80, or drifting `internal_port` away from it, each fails on its own control.
