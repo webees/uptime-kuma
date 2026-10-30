@@ -87,6 +87,7 @@ Then, before any other work:
 Nothing may be optimized, scored, merged, deployed or called finished while a
 row is missing, failing, unverified, or carries an unclassified residual.
 
+
 ## Matrix
 
 One row per class, always these eight columns, in this order:
@@ -94,13 +95,16 @@ One row per class, always these eight columns, in this order:
 | Class | History | Authoritative guard | Positive | Boundary | Negative | Mutation control | Observed result |
 |---|---|---|---|---|---|---|---|
 
-- `History` is the `git log -S` / `git log -G` classification, not a guess.
+- `History` is the `git log -S` / `git log -G` classification plus the commit
+  it rests on — `unchanged, git log -Sx → abc1234`, `regressed by abcdef1`.
+  A bare `n/a` is not a classification and `validate` rejects it.
 - `Authoritative guard` is one `path:symbol` pair. Two guards for one invariant
   means the invariant is still fragmented.
 - `Positive`, `Boundary` and `Negative` each name the command or test that was
   run, and the row is only filled once that ran.
-- `Mutation control` names the control and states what changed when the guard
-  was removed. A control that stays green proves nothing.
+- `Mutation control` names the runnable test or command in backticks and states
+  what changed when the guard was removed. "5 controls" is a count, not a
+  location; a control that stays green proves nothing.
 - `Observed result` quotes the actual output. Anything not run says `未验证`
   with the reason.
 

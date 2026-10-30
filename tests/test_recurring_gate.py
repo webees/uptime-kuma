@@ -190,6 +190,13 @@ def assert_target_mode_is_actionable(
     case.assertIn('"show", f"{ref}:docs/recurring_issues.md"', round_open)
     case.assertIn("continues(previous.group(1), recorded_baseline(entry))", round_open)
 
+    # Two prose columns were satisfiable with a word; the checker owns their
+    # shape and the protocol must say so, or a writer follows the old advice.
+    case.assertIn("HISTORY.search", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    case.assertIn("RUNNABLE.search", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    case.assertIn("`n/a` is not a classification and `validate` rejects it", found["Matrix"])
+    case.assertIn("names the runnable test or command in backticks", found["Matrix"])
+
     # The rejection list is the thing that voids a round; a subset is not one.
     for clause in ("a matrix column or row is missing",
                    "no control turned red",
@@ -222,7 +229,8 @@ def assert_pr_template_carries_the_matrix(case: unittest.TestCase, template: str
 def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
     """A body whose matrix is fully filled, for parser tests."""
     rows = "\n".join(
-        f"| {title} | unchanged | `a.py:b` | ran | ran | ran | ran | {result} |"
+        f"| {title} | unchanged, `git log -Gx` → `abc1234` | `a.py:b` | ran | "
+        f"ran | ran | `tests/a.py:case` | {result} |"
         for title in target_classes(document)
     )
     return f"## Conclusion\n\nx\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n|{'---|' * len(TARGET_MODE_COLUMNS)}\n{rows}\n\n## Changes\n\nx\n"
@@ -448,6 +456,25 @@ def permissions_block(text: str) -> str:
     return "\n".join(lines)
 
 
+def replace_row(body: str, column: str, value: str) -> str:
+    """Set one cell on every data row of a complete body, header untouched."""
+    index = TARGET_MODE_COLUMNS.index(column)
+    lines = body.splitlines()
+    seen_header = False
+    for number, line in enumerate(lines):
+        if not line.startswith("|"):
+            continue
+        if not seen_header:
+            seen_header = True
+            continue
+        cells = line.strip().strip("|").split(" | ")
+        if len(cells) != len(TARGET_MODE_COLUMNS):
+            continue
+        cells[index] = value
+        lines[number] = "| " + " | ".join(cells) + " |"
+    return "\n".join(lines) + "\n"
+
+
 def authority_path(document: str, title: str) -> str:
     """The first file named in a class's `Authority:` line."""
     block = document.split(f"\n## {title}\n", 1)[1].split("\n## ", 1)[0]
@@ -459,13 +486,29 @@ def run_matrix(
     body: str, document: str, touched: list[str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run the PR-matrix checker over a body and a class document."""
+    return run_mutated_matrix(body, document, [], touched)
+
+
+def run_mutated_matrix(
+    body: str,
+    document: str,
+    replacements: list[tuple[str, str]],
+    touched: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run the checker with `replacements` applied to its own source."""
+    source = (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8")
+    for old, new in replacements:
+        assert old in source, old
+        source = source.replace(old, new, 1)
     with tempfile.TemporaryDirectory(prefix="pr-matrix-") as tmp:
         paths = []
         for name, text in (("body.md", body), ("issues.md", document)):
             path = Path(tmp) / name
             path.write_text(text, encoding="utf-8")
             paths.append(str(path))
-        command = [sys.executable, str(ROOT / "scripts/pr_matrix.py"), *paths]
+        script = Path(tmp) / "mutated.py"
+        script.write_text(source, encoding="utf-8")
+        command = [sys.executable, str(script), *paths]
         if touched is not None:
             command += ["--touched", *touched]
         return subprocess.run(
@@ -1039,6 +1082,16 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_target_mode_is_actionable(self, mode, detached, round_open)
 
+        # Control: the writer advice reverts to the word that used to pass.
+        vague_advice = mode.replace(
+            "A bare `n/a` is not a classification and `validate` rejects it.",
+            "A bare `n/a` is accepted.",
+            1,
+        )
+        self.assertNotEqual(vague_advice, mode)
+        with self.assertRaises(AssertionError):
+            assert_target_mode_is_actionable(self, vague_advice, issues, round_open)
+
         # Third control: drop a matrix column from the generator only. The
         # written table and the printed skeleton silently diverge.
         drifted = round_open.replace('"Observed result",\n', "", 1)
@@ -1147,6 +1200,47 @@ class RecurringContractTest(unittest.TestCase):
         self.assertEqual(
             run_matrix(good, document, touched=[]).returncode, 2
         )
+
+        # `History` and `Mutation control` are the two columns a row can fill
+        # with a word. Both have a required shape: the classification plus the
+        # commit it rests on, and a named file or command that can be run.
+        self.assertIn("History", broken(replace_row(good, "History", "n/a")))
+        self.assertIn("History", broken(replace_row(good, "History", "unchanged")))
+        self.assertIn("Mutation control", broken(replace_row(good, "Mutation control", "n/a")))
+        # Positive: every classification word the protocol allows, with the
+        # commit that supports it, and a control named by file.
+        for classification in ("never fixed", "never established", "regressed", "partial"):
+            self.assertEqual(
+                run_matrix(
+                    replace_row(good, "History", f"{classification}, `git log -Sx` → `abc1234`"),
+                    document,
+                ).returncode,
+                0,
+            )
+        self.assertEqual(
+            run_matrix(replace_row(good, "Mutation control", "`tests/a.py:case`"), document).returncode,
+            0,
+        )
+
+        # Mutation controls, one per column: each check is what turns its
+        # words back into evidence, so dropping it lets that row pass again.
+        vague_history = replace_row(good, "History", "n/a")
+        without_history = run_mutated_matrix(
+            vague_history,
+            document,
+            [('        if history and not (HISTORY.search(history)',
+              '        history = found[1]\n        if False and not (HISTORY.search(history)')],
+        )
+        self.assertEqual(without_history.returncode, 0, without_history.stderr)
+
+        vague_control = replace_row(good, "Mutation control", "n/a")
+        without_control = run_mutated_matrix(
+            vague_control,
+            document,
+            [("        if control and not RUNNABLE.search(control):",
+              "        if False and not RUNNABLE.search(control):")],
+        )
+        self.assertEqual(without_control.returncode, 0, without_control.stderr)
 
         # Mutation control 4: a ninth-but-wrong column shifts every cell.
         widened = good.replace(
