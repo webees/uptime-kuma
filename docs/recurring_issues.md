@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: all 81 commits reachable through `b4df83c` on 2026-10-30,
-extending the previous 80-commit baseline at `7b34632`. Every later round must
+Audit baseline: all 82 commits reachable through `2c4ce8a` on 2026-10-30,
+extending the previous 81-commit baseline at `b4df83c`. Every later round must
 extend that audit to every commit reachable at its start.
 
 ## Target-Mode Prompt
