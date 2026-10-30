@@ -54,6 +54,13 @@ that opens on a stale baseline fails its own PR instead of merging the debt
 forward. Only the PR path is gated: a `push` build has no base, and the
 `workflow_call` copy would otherwise fail the publish for the same reason.
 
+When a round extends the baseline, it names the baseline it supersedes in the
+same sentence and the script requires the new one to descend from it. A hash is
+cheap; pasting a newer one closes the gap as well as auditing a commit does, so
+the chain is what proves the middle was reached. A missing predecessor exits
+`4`, a predecessor that does not resolve or is not an ancestor exits `2`.
+Never restart or fork the chain to make the gate green.
+
 Then, before any other work:
 
 1. Read `docs/recurring_issues.md` and `tests/test_recurring_gate.py` whole.

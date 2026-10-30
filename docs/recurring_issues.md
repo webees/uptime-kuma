@@ -13,12 +13,19 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `915e72f` on 2026-10-30,
-extending the previous baseline at `62b456d`. Every later round must extend that
+Audit baseline: every commit reachable through `d0190f4` on 2026-10-30,
+extending the previous baseline at `915e72f`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
 has not reached the branch it lands on.
+
+The chain is checked, not just recorded. A hash is cheap, so pasting a newer
+one closes the gap exactly as well as auditing a commit; `scripts/round_open.py`
+therefore requires the baseline to descend from the one named here, and exits
+`4` when the predecessor is missing and `2` when it does not resolve or is not
+an ancestor. Restarting or forking the chain is what would silently drop the
+commits in between from every later round.
 
 ## Target-Mode Prompt
 
