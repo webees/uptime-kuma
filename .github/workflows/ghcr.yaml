@@ -38,6 +38,7 @@ on:
       - scripts/rebuild.sh
       - scripts/round_open.py
       - scripts/deploy_drift.py
+      - scripts/branch_rule.py
 
 env:
   REGISTRY: ghcr.io

@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `2c5e2cd` on 2026-10-30,
-extending the previous baseline at `9cdd04f`. Every later round must extend that
+Audit baseline: every commit reachable through `1887331` on 2026-10-30,
+extending the previous baseline at `2c5e2cd`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it and prints how far `HEAD` has moved past the baseline.
@@ -277,8 +277,13 @@ exact amd64 manifest digest produced by a build that passed `validate`;
 name that CI resolves and passes as `-a` to both the deploy and the verifier.
 Every workflow action is pinned to a 40-character commit instead of a movable
 tag, and keeps its release as a trailing comment so the pin stays reviewable.
-Validation is a required check. Tracked files and reachable history carry no
-real domain, bucket, token, or machine identifier.
+Validation is a required check. That requirement lives in branch protection,
+not in the repository, and `GITHUB_TOKEN` cannot read the rule (there is no
+`administration` scope), so the rule is recorded in
+`docs/branch_protection.json` and compared by `scripts/branch_rule.py`. A
+`validate` job rename would otherwise leave a context nothing ever satisfies
+and block every merge. Tracked files and reachable history carry no real
+domain, bucket, token, or machine identifier.
 
 Builds publish provenance attestations. They land in the same index as
 `unknown/unknown` children, so the digest step filters on both architecture and
@@ -364,6 +369,8 @@ Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/ghcr.yaml:paths-ignore` with `.dockerignore`, and
 `.github/workflows/deploy-drift.yml` with `scripts/deploy_drift.py:check`, and
 `.github/workflows/ghcr-cleanup.yml:cleanup`.
+The recorded branch rule is `docs/branch_protection.json`, read by
+`scripts/branch_rule.py:compare`.
 
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
@@ -377,6 +384,15 @@ which rewrites the listener back to 80 and drifts `internal_port` to 8081.
 A bare SHA is immutable but unreadable, so each pin also carries its release as
 a trailing comment; the same test deletes one comment while keeping the SHA,
 which only the readability rule can catch.
+The required check is one of these reachability questions: renaming the
+`validate` job, or the workflow that supplies half of its reported context,
+leaves a requirement nothing can satisfy.
+`tests/test_recurring_gate.py:test_required_context_names_a_real_job` resolves
+every recorded context against the real jobs, and
+`tests/test_recurring_gate.py:test_recorded_rule_matches_the_live_rule` runs
+`scripts/branch_rule.py` over a live payload; renaming the job, mis-titling the
+workflow, unbinding admins, emptying the list, or dropping a field each turns
+red.
 The release path is also the only one Fly answers 5xx on independently of the
 commit (observed twice: `failed to create release (status 503)` while reads
 stayed healthy), so
@@ -426,6 +442,10 @@ day each fails with its own mutation control. Because that shared group is held
 for the whole job, the cleanup must also pin `ubuntu-24.04` and declare a
 `timeout-minutes` of at most 30; the shipped `ubuntu-latest`-without-timeout
 shape and a six-hour limit each turn the same test red.
+The required check must name the real job and workflow it is recorded against,
+and admins must stay bound. Renaming the job, mis-titling the workflow,
+unbinding admins, emptying the context list, or dropping a field from the live
+payload each fails on its own control.
 The Caddyfile listener must be above 1024 and equal to both
 `http_service.internal_port` and `checks.health.port`; moving the listener back
 to 80, or drifting `internal_port` away from it, each fails on its own control.
