@@ -202,6 +202,67 @@ def assert_pr_template_carries_the_matrix(case: unittest.TestCase, template: str
         case.assertIn(f"{heading}\n", template)
 
 
+def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -> None:
+    """A hand deploy reaches production first, so the detector must exist.
+
+    It has to run without being asked (a push and a cron), read a pinned CLI,
+    bound every read, and hand the decision to the script instead of deciding
+    inline. A missing read must abort — "cannot tell" is not "in sync".
+    """
+    case.assertIn("    branches:\n      - main\n", drift)
+    crons = schedule_entries(drift)
+    case.assertEqual(len(crons), 1, "one daily slot is expected")
+    case.assertEqual(crons[0].split()[2:], ["*", "*", "*"], "drift must run every day")
+    case.assertIn("  workflow_dispatch: {}", drift)
+
+    # The CLI is a pinned GitHub release, never the action that asks Fly for
+    # `latest` while Fly is the thing being tested.
+    case.assertNotIn("superfly/flyctl-actions", drift)
+    case.assertRegex(drift, r"FLYCTL_VERSION: \d+\.\d+\.\d+")
+    case.assertRegex(drift, r"FLYCTL_SHA256: [0-9a-f]{64}")
+    version = re.search(r"FLYCTL_VERSION: (\d+\.\d+\.\d+)", drift).group(1)
+    case.assertIn(f"FLYCTL_ASSET: flyctl_{version}_Linux_x86_64.tar.gz", drift)
+    case.assertIn("github.com/superfly/flyctl/releases/download/v${FLYCTL_VERSION}", drift)
+    case.assertIn("sha256sum -c -", drift)
+
+    # Every read is bounded, redirected, and aborts before the comparison.
+    case.assertIn("timeout-minutes: ", drift)
+    case.assertIn("--retry 3 --max-time 120", drift)
+    case.assertEqual(drift.count("timeout 60 flyctl "), 2)
+    case.assertIn("timeout 120 docker buildx imagetools inspect", drift)
+    case.assertIn("--raw >", drift)
+    case.assertIn("set -euo pipefail", drift)
+    case.assertIn('"${FLY_API_TOKEN:?', drift)
+
+    # The app comes from `fly.toml`, never from a local default.
+    case.assertIn("sed -n 's/^app = \"\\(.*\\)\"$/\\1/p' fly.toml", drift)
+    case.assertIn('flyctl releases -a "$app"', drift)
+    case.assertIn('flyctl status -a "$app"', drift)
+
+    # An undefined `REGISTRY`/`IMAGE_NAME` silently probes `/latest`, which
+    # docker resolves as a local image and every run then reads as unreadable.
+    case.assertIn("  REGISTRY: ghcr.io\n", drift)
+    case.assertIn("  IMAGE_NAME: ${{ github.repository }}\n", drift)
+    case.assertIn('"${REGISTRY}/${IMAGE_NAME}:latest"', drift)
+
+    # The decision and its failure modes live in the tested script.
+    case.assertIn("python3 scripts/deploy_drift.py", drift)
+    case.assertNotIn("jq -e", drift, "the comparison must not fork into inline jq")
+
+    # The publish trigger must not filter out the workflow that watches it.
+    ignored = push_paths_ignore(build)
+    case.assertIn(".github/**", ignored, "workflow edits must still rebuild")
+    # The script is not copied into the image either, so editing it must not
+    # rebuild; both lists have to agree on that.
+    case.assertIn("scripts/deploy_drift.py", PUSH_IGNORABLE)
+    case.assertIn("scripts/deploy_drift.py", ignored)
+
+
+def assert_drift_workflow_is_registered(case: unittest.TestCase, workflows: dict[str, str]) -> None:
+    """A detector nothing runs is a document, not a gate."""
+    case.assertIn("deploy-drift.yml", workflows)
+
+
 def scan_for_sensitive_data(text: str) -> list[str]:
     return [label for label, pattern in SENSITIVE_PATTERNS if pattern.search(text)]
 
@@ -332,6 +393,7 @@ PUSH_IGNORABLE = {
     "tests/**",
     "scripts/rebuild.sh",
     "scripts/round_open.py",
+    "scripts/deploy_drift.py",
 }
 
 
@@ -883,7 +945,7 @@ class RecurringContractTest(unittest.TestCase):
             path.name: path.read_text(encoding="utf-8")
             for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
         }
-        self.assertEqual(len(workflows), 3)
+        self.assertEqual(len(workflows), 4)
         assert_actions_are_pinned(self, workflows)
 
         # Mutation control: one floating tag is enough to fail, and the message
@@ -1075,6 +1137,63 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(drifted, build)
         with self.assertRaises(AssertionError):
             assert_flyctl_comes_from_github(self, drifted)
+
+    def test_deploy_drift_workflow_is_wired(self) -> None:
+        """A hand deploy bypasses the digest gate; this is the only detector."""
+        drift = workflow("deploy-drift.yml")
+        build = workflow("ghcr.yaml")
+        workflows = {path.name: path.read_text(encoding="utf-8")
+                     for path in sorted(WORKFLOWS.glob("*.yml"))}
+        assert_drift_workflow_is_registered(self, workflows)
+        assert_drift_check_exists(self, drift, build)
+
+        # Mutation control: drop the push trigger, so only the daily cron is
+        # left and a hand deploy goes unnoticed for up to a day.
+        unsolicited = drift.replace(
+            "  push:\n    branches:\n      - main\n", "", 1
+        )
+        self.assertNotEqual(unsolicited, drift)
+        with self.assertRaises(AssertionError):
+            assert_drift_check_exists(self, unsolicited, build)
+
+        # Second control: a monthly cron is not a daily one.
+        monthly = drift.replace("'41 5 * * *'", "'41 5 1 * *'", 1)
+        self.assertNotEqual(monthly, drift)
+        with self.assertRaises(AssertionError):
+            assert_drift_check_exists(self, monthly, build)
+
+        # Third control: the manual escape hatch disappears, so the path can
+        # only be exercised at the cron's convenience.
+        undispatchable = drift.replace("  workflow_dispatch: {}\n", "", 1)
+        self.assertNotEqual(undispatchable, drift)
+        with self.assertRaises(AssertionError):
+            assert_drift_check_exists(self, undispatchable, build)
+
+        # Fourth control: an unbounded read hangs the job until the workflow
+        # timeout instead of failing closed.
+        unbounded = drift.replace("timeout 60 flyctl status", "flyctl status", 1)
+        self.assertNotEqual(unbounded, drift)
+        with self.assertRaises(AssertionError):
+            assert_drift_check_exists(self, unbounded, build)
+
+        # Fifth control: decide inline with jq instead of the tested script, so
+        # the fail-closed exit codes and the fixtures stop applying.
+        inline = drift.replace(
+            'python3 scripts/deploy_drift.py \\\n'
+            '            "$out/releases.json" "$out/status.json" "$out/latest.json"',
+            'jq -e . "$out/status.json" > /dev/null',
+            1,
+        )
+        self.assertNotEqual(inline, drift)
+        with self.assertRaises(AssertionError):
+            assert_drift_check_exists(self, inline, build)
+
+        # Sixth control: drop the repository name, so the probe addresses
+        # `/latest` and docker answers from whatever local image exists.
+        unnamed = drift.replace("  IMAGE_NAME: ${{ github.repository }}\n", "", 1)
+        self.assertNotEqual(unnamed, drift)
+        with self.assertRaises(AssertionError):
+            assert_drift_check_exists(self, unnamed, build)
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""
