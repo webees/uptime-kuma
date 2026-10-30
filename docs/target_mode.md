@@ -54,6 +54,12 @@ that opens on a stale baseline fails its own PR instead of merging the debt
 forward. Only the PR path is gated: a `push` build has no base, and the
 `workflow_call` copy would otherwise fail the publish for the same reason.
 
+An `Observed result` of `未验证` with a reason is legal, but not for a class
+whose authoritative guard this PR edits. The step passes the changed file list
+from the same API to `pr_matrix.py --touched`, and any class naming one of
+those files as its authority must carry a real observation. The reader has the
+diff in hand; no later round will look again.
+
 When a round extends the baseline, it names the baseline it supersedes in the
 same sentence and the script requires the new one to descend from it. A hash is
 cheap; pasting a newer one closes the gap as well as auditing a commit does, so
