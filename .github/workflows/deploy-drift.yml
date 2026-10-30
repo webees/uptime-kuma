@@ -1,14 +1,15 @@
 name: 🧭 Deploy Drift
 
 on:
-  # Daily, plus every `main` push so a hand deploy is caught within the hour
-  # instead of at the next cron. The push trigger is also what keeps GitHub
-  # from disabling the workflow after a long quiet period.
+  # After every publish finishes, not on the push itself: the release and the
+  # machine move separately, so a check racing the deploy sees the new release
+  # next to the old machine and calls a healthy deploy unreadable (observed on
+  # the first main run, which it also cancelled). Daily catches a hand deploy.
   schedule:
     - cron: '41 5 * * *'
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["🐳 Docker (Multi-Arch)"]
+    types: [completed]
   workflow_dispatch: {}
 
 permissions:
@@ -20,20 +21,28 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 concurrency:
-  # Shared with the publish workflow, so a `main` push is checked after its
-  # deploy finished. Reading while a promotion runs would see the new release
-  # next to the old machine and report "unreadable" on a healthy deploy.
-  group: ghcr-registry
+  # Sequencing comes from `workflow_run`; this group only orders the checks.
+  # A second one is queued rather than dropped, because the later state is the
+  # one worth reporting.
+  group: deploy-drift
   cancel-in-progress: false
 
 jobs:
   drift:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # A cancelled or skipped publish still leaves a readable pair; only a run
+    # that never started has nothing to say.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion != 'skipped'
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          # `workflow_run` runs on the default branch; the check must read the
+          # commit that was just published, not whatever HEAD is by then.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
 
       # Same pinned GitHub release as the deploy job: the setup action resolves

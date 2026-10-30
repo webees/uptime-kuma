@@ -209,7 +209,11 @@ def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -
     bound every read, and hand the decision to the script instead of deciding
     inline. A missing read must abort — "cannot tell" is not "in sync".
     """
-    case.assertIn("    branches:\n      - main\n", drift)
+    # It runs *after* a publish, never on the push: the release and the machine
+    # move separately, so a racing read calls a healthy deploy unreadable.
+    case.assertIn('  workflow_run:\n    workflows: ["🐳 Docker (Multi-Arch)"]\n'
+                  "    types: [completed]\n", drift)
+    case.assertNotIn("  push:\n", drift.split("\npermissions:", 1)[0])
     crons = schedule_entries(drift)
     case.assertEqual(len(crons), 1, "one daily slot is expected")
     case.assertEqual(crons[0].split()[2:], ["*", "*", "*"], "drift must run every day")
@@ -234,11 +238,15 @@ def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -
     case.assertIn("set -euo pipefail", drift)
     case.assertIn('"${FLY_API_TOKEN:?', drift)
 
-    # The check reads a release and a machine that a promotion moves separately,
-    # so it must not run beside the publish: share its group, never cancel.
-    case.assertIn("  group: ghcr-registry\n", drift)
+    # A skipped publish has nothing to compare; a cancelled one still might.
+    case.assertIn("github.event.workflow_run.conclusion != 'skipped'", drift)
+    # The default-branch checkout must be moved to the published commit.
+    case.assertIn("ref: ${{ github.event.workflow_run.head_sha || github.sha }}", drift)
+
+    # Ordering comes from `workflow_run`, so the group only orders checks and
+    # must never drop the later, more relevant one.
+    case.assertIn("  group: deploy-drift\n", drift)
     case.assertIn("  cancel-in-progress: false\n", drift)
-    case.assertIn("  group: ghcr-registry\n", build)
 
     # The app comes from `fly.toml`, never from a local default.
     case.assertIn("sed -n 's/^app = \"\\(.*\\)\"$/\\1/p' fly.toml", drift)
@@ -1153,10 +1161,11 @@ class RecurringContractTest(unittest.TestCase):
         assert_drift_workflow_is_registered(self, workflows)
         assert_drift_check_exists(self, drift, build)
 
-        # Mutation control: drop the push trigger, so only the daily cron is
-        # left and a hand deploy goes unnoticed for up to a day.
+        # Mutation control: drop the publish trigger, so a deploy is only
+        # checked whenever the cron happens to fall.
         unsolicited = drift.replace(
-            "  push:\n    branches:\n      - main\n", "", 1
+            '  workflow_run:\n    workflows: ["🐳 Docker (Multi-Arch)"]\n'
+            "    types: [completed]\n", "", 1
         )
         self.assertNotEqual(unsolicited, drift)
         with self.assertRaises(AssertionError):
@@ -1201,12 +1210,22 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_drift_check_exists(self, unnamed, build)
 
-        # Seventh control: give the check its own group, so a `main` push can
-        # read the new release against the old machine mid-promotion.
-        racing = drift.replace("  group: ghcr-registry\n", "  group: deploy-drift\n", 1)
+        # Seventh control: cancel the older check instead of queueing it, so a
+        # burst of deploys leaves only the first, stalest state reported.
+        racing = drift.replace("  cancel-in-progress: false\n",
+                               "  cancel-in-progress: true\n", 1)
         self.assertNotEqual(racing, drift)
         with self.assertRaises(AssertionError):
             assert_drift_check_exists(self, racing, build)
+
+        # Eighth control: keep the default-branch checkout, so a slower publish
+        # is compared against a newer tree than the one it built.
+        unmoved = drift.replace(
+            "          ref: ${{ github.event.workflow_run.head_sha || github.sha }}\n", "", 1
+        )
+        self.assertNotEqual(unmoved, drift)
+        with self.assertRaises(AssertionError):
+            assert_drift_check_exists(self, unmoved, build)
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""
