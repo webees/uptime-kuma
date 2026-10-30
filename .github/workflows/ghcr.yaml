@@ -22,6 +22,20 @@ on:
     branches:
       - main
     tags: [ '*' ]
+    # A docs or test edit cannot change the image, yet it still queued a full
+    # build and a production deploy. Everything listed here is either excluded
+    # from the build context by `.dockerignore` or is CI-only. `Dockerfile`,
+    # `config/**`, `scripts/entrypoint*`, `scripts/restic.sh`, `scripts/
+    # services.sh` and `.dockerignore` must stay deployable, and tag pushes are
+    # never path-filtered, so releases still publish.
+    paths-ignore:
+      - .gitignore
+      - README.md
+      - LICENSE
+      - .github/**
+      - docs/**
+      - tests/**
+      - scripts/rebuild.sh
 
 env:
   REGISTRY: ghcr.io
