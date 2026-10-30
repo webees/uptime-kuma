@@ -61,6 +61,12 @@ the chain is what proves the middle was reached. A missing predecessor exits
 `4`, a predecessor that does not resolve or is not an ancestor exits `2`.
 Never restart or fork the chain to make the gate green.
 
+Naming a predecessor is still an act of self-certification while both hashes
+come from the same edit. So on the PR path the named predecessor must also be
+the baseline recorded in `docs/recurring_issues.md` **at the base commit**, and
+a base that records no baseline exits `5`. Copy the value out of
+`git show <base>:docs/recurring_issues.md` instead of out of the working file.
+
 Then, before any other work:
 
 1. Read `docs/recurring_issues.md` and `tests/test_recurring_gate.py` whole.

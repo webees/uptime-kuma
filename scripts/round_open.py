@@ -21,6 +21,12 @@ supersedes, and the script refuses one that does not descend from it. A
 missing or unrelated predecessor exits `4`, so the chain cannot be restarted
 or forked to make the gate green.
 
+Naming a predecessor is still self-certified while both hashes come from the
+working copy. With `--entry`, the predecessor must also be exactly the baseline
+recorded in `docs/recurring_issues.md` at that commit, so the pair is compared
+against the branch rather than against itself. A base whose file records no
+baseline exits `5`: the round cannot know what to extend.
+
 Two distances are reported because they mean different things. Everything past
 the baseline up to `HEAD` is what the round still has to audit, and it is never
 zero inside a pull request: the round's own commits are past the baseline and
@@ -60,6 +66,27 @@ USAGE = "usage: round_open.py [--require-closed [--entry REF]]"
 
 class Unreadable(Exception):
     """The baseline or the history cannot be read, so the gate must not pass."""
+
+
+class Missing(Unreadable):
+    """The base records no baseline, so there is nothing to extend."""
+
+
+def recorded_baseline(ref: str) -> str:
+    """The baseline committed at `ref`, which the round must be extending.
+
+    Both hashes in the working file are written by the same author in the same
+    edit, so nothing in the document proves the predecessor is the real one.
+    Reading the file out of the base commit does.
+    """
+    try:
+        text = _git("show", f"{ref}:docs/recurring_issues.md")
+    except Unreadable as error:
+        raise Missing(f"{ref}:docs/recurring_issues.md records no audit baseline: {error}") from error
+    match = BASELINE.search(text)
+    if match is None:
+        raise Missing(f"{ref}:docs/recurring_issues.md records no audit baseline")
+    return match.group(1)
 
 
 def _git(*args: str) -> str:
@@ -117,6 +144,16 @@ def lineage(baseline: str, previous: str) -> None:
             f"baseline {baseline} does not descend from the previous baseline "
             f"{previous}: {error}"
         ) from error
+
+
+def continues(previous: str, at_base: str) -> None:
+    """The named predecessor must be the one the base branch actually records."""
+    if previous == at_base:
+        return
+    raise Unreadable(
+        f"predecessor {previous} is not the baseline recorded at the base "
+        f"commit ({at_base})"
+    )
 
 
 def classes(text: str) -> list[str]:
@@ -182,6 +219,11 @@ def main(argv: list[str]) -> int:
     try:
         total, owed, gap = audit(baseline, entry)
         lineage(baseline, previous.group(1))
+        if entry is not None:
+            continues(previous.group(1), recorded_baseline(entry))
+    except Missing as error:
+        print(f"cannot read the baseline: {error}", file=sys.stderr)
+        return 5
     except Unreadable as error:
         print(f"cannot read the baseline: {error}", file=sys.stderr)
         return 2
@@ -212,6 +254,7 @@ def main(argv: list[str]) -> int:
     if require_closed:
         # With an entry ref only the marker matters: the round's own commits are
         # legitimately past the baseline and the matrix is their evidence.
+        # The base file is compared above, so `entry` needs no second run.
         missing = gap if gap is not None else owed
         if missing != "0":
             where = f"up to {entry}" if entry else "up to HEAD"
