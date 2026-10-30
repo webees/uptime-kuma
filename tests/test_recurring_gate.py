@@ -218,9 +218,17 @@ def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -
     """
     # It runs *after* a publish, never on the push: the release and the machine
     # move separately, so a racing read calls a healthy deploy unreadable.
-    case.assertIn('  workflow_run:\n    workflows: ["🐳 Docker (Multi-Arch)"]\n'
-                  "    types: [completed]\n", drift)
+    case.assertIn("  workflow_run:\n    workflows: [", drift)
+    case.assertIn("    types: [completed]\n", drift)
     case.assertNotIn("  push:\n", drift.split("\npermissions:", 1)[0])
+
+    # `workflow_run` names its source by title, not by path: renaming the
+    # publish workflow leaves a detector that never fires again.
+    published = re.search(r"(?m)^name: (.+)$", build)
+    case.assertIsNotNone(published, "the publish workflow has no name")
+    watched = re.search(r'(?m)^  workflow_run:\n    workflows: \["(.+)"\]$', drift)
+    case.assertIsNotNone(watched, "workflow_run must name exactly one workflow")
+    case.assertEqual(watched.group(1), published.group(1).strip())
     crons = schedule_entries(drift)
     case.assertEqual(len(crons), 1, "one daily slot is expected")
     case.assertEqual(crons[0].split()[2:], ["*", "*", "*"], "drift must run every day")
@@ -1233,6 +1241,14 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(unmoved, drift)
         with self.assertRaises(AssertionError):
             assert_drift_check_exists(self, unmoved, build)
+
+        # Ninth control: rename the publish workflow and leave the detector on
+        # the old title. Nothing errors; the check simply stops being queued.
+        renamed = build.replace("name: 🐳 Docker (Multi-Arch)",
+                                "name: 🐳 Image", 1)
+        self.assertNotEqual(renamed, build)
+        with self.assertRaises(AssertionError):
+            assert_drift_check_exists(self, drift, renamed)
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""

@@ -346,6 +346,8 @@ detector is after the fact by design, because a hand deploy cannot be blocked.
 It runs on `workflow_run` rather than the push, because a release and a machine
 move separately and reading between them looks like a broken app; the first
 `main` push proved it by cancelling the publish run before any job started.
+`workflow_run` names its source by workflow title, so renaming the publish
+workflow without renaming the listener stops the check from ever being queued.
 
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and

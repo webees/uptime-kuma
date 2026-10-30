@@ -115,7 +115,8 @@ merge (see [Residual risk](#-residual-risk)).
 `deploy-drift` runs after every publish and daily at 05:41: it reads the machine
 image and the `latest` amd64 child and fails on a difference. It is the only
 detector for the case above — a hand deploy, or a promotion that never happened
-— because CI itself is not involved in either.
+— because CI itself is not involved in either. It is triggered by the publish
+workflow's *title*, so renaming that workflow means renaming the listener too.
 
 ### CI Deploy Credential
 
