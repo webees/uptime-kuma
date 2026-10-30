@@ -39,6 +39,7 @@ on:
       - scripts/round_open.py
       - scripts/deploy_drift.py
       - scripts/branch_rule.py
+      - scripts/pr_matrix.py
 
 env:
   REGISTRY: ghcr.io

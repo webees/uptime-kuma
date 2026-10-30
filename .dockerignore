@@ -14,4 +14,5 @@ scripts/deploy_drift.py
 scripts/rebuild.sh
 scripts/round_open.py
 scripts/branch_rule.py
+scripts/pr_matrix.py
 tests

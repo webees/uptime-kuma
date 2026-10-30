@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `851f936` on 2026-10-30,
-extending the previous baseline at `1887331`. Every later round must extend that
+Audit baseline: every commit reachable through `5a0d40c` on 2026-10-30,
+extending the previous baseline at `851f936`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it and prints how far `HEAD` has moved past the baseline.
@@ -29,7 +29,9 @@ the history classification, authoritative guard, positive, boundary and
 negative evidence, a named mutation control, and the observed result. Run the
 named mutation control and prove that removing the guard changes the outcome.
 If a row is failing, unverified, or shows a guard weakened by simplification,
-repair the invariant in the same round before other work. Do not optimize,
+repair the invariant in the same round before other work. `validate` reads the
+matrix out of the pull request body and fails on a missing class, column, or
+cell, so the skeleton cannot be left as shipped. Do not optimize,
 score, merge, deploy, or claim completion while any row lacks evidence or has an
 unclassified residual. Record the matrix in the PR or final report without
 creating per-round files. The matrix is a review artifact, not a score: a

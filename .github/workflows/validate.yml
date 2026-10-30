@@ -12,6 +12,9 @@ on:
 
 permissions:
   contents: read
+  # The round matrix lives in the PR body, so the step that checks it reads
+  # the pull request itself; a checked-out file would be self-certified.
+  pull-requests: read
 
 # The same push triggers a standalone Validate and the one nested in the
 # publish workflow. Keyed only on the ref, the two share a group and the nested
@@ -77,6 +80,22 @@ jobs:
 
       # Every path proves the image: ghcr.yaml reuses this workflow and must
       # never publish a commit whose runtime gates did not run.
+      # The matrix is a rejection criterion in docs/target_mode.md, so the body
+      # is checked instead of reviewed by eye. Only a PR has a body; the push
+      # and `workflow_call` copies legitimately carry none.
+      - name: 🧾 Round matrix
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          : "${PR:?a pull request number is required}"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq .body \
+            > "$RUNNER_TEMP/body.md"
+          test -s "$RUNNER_TEMP/body.md"
+          python3 scripts/pr_matrix.py "$RUNNER_TEMP/body.md" docs/recurring_issues.md
+
       - name: 🐳 Build and exercise the image
         run: |
           docker build --tag validate:local .

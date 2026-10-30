@@ -72,6 +72,12 @@ One row per class, always these eight columns, in this order:
 The matrix goes into the PR body and the final report. It is a review artifact,
 not a score, and it never becomes a per-round file.
 
+The PR body is machine-checked: `scripts/pr_matrix.py` runs in `validate` for
+pull requests and rejects a missing class, a missing or extra column, an empty
+cell, a duplicate row, and a bare `未验证` with no reason. A `## Matrix` section
+that exists is read from the GitHub API, not from a file the branch carries, so
+the table in the body is the table that was checked.
+
 ## Report order
 
 Conclusion, then matrix, then changes, then verification with run URLs and the

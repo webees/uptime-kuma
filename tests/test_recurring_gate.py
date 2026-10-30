@@ -211,6 +211,41 @@ def assert_pr_template_carries_the_matrix(case: unittest.TestCase, template: str
         case.assertIn(f"{heading}\n", template)
 
 
+def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
+    """A body whose matrix is fully filled, for parser tests."""
+    rows = "\n".join(
+        f"| {title} | unchanged | `a.py:b` | ran | ran | ran | ran | {result} |"
+        for title in target_classes(document)
+    )
+    return f"## Conclusion\n\nx\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n|{'---|' * len(TARGET_MODE_COLUMNS)}\n{rows}\n\n## Changes\n\nx\n"
+
+
+def target_classes(document: str) -> list[str]:
+    return [
+        title.strip()
+        for title in re.findall(r"(?m)^## (.+)$", document)
+        if title.strip() not in {"Target-Mode Prompt", "Every-Round Goal Gate"}
+    ]
+
+
+def assert_matrix_gate_is_wired(case: unittest.TestCase, validate: str) -> None:
+    """The matrix is a rejection criterion, so a step must read the body.
+
+    `docs/target_mode.md` puts the matrix in the PR body and voids a round
+    without one, but a required check that never opens the body enforces it by
+    reviewer attention alone.
+    """
+    case.assertIn("scripts/pr_matrix.py", validate)
+    case.assertIn("pull-requests: read", validate)
+    step = validate.split("name: 🧾 Round matrix", 1)
+    case.assertEqual(len(step), 2, "the matrix step is missing")
+    body = step[1].split("- name:", 1)[0]
+    case.assertIn("if: github.event_name == 'pull_request'", body)
+    # The body comes from the API, not from a checked-out file a PR can fake.
+    case.assertIn("gh api", body)
+    case.assertIn(".body", body)
+
+
 def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -> None:
     """A hand deploy reaches production first, so the detector must exist.
 
@@ -353,6 +388,23 @@ def workflow(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
 
 
+def run_matrix(body: str, document: str) -> subprocess.CompletedProcess[str]:
+    """Run the PR-matrix checker over a body and a class document."""
+    with tempfile.TemporaryDirectory(prefix="pr-matrix-") as tmp:
+        paths = []
+        for name, text in (("body.md", body), ("issues.md", document)):
+            path = Path(tmp) / name
+            path.write_text(text, encoding="utf-8")
+            paths.append(str(path))
+        return subprocess.run(
+            [sys.executable, str(ROOT / "scripts/pr_matrix.py"), *paths],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+
 def compare_rule(case: unittest.TestCase, live: object) -> subprocess.CompletedProcess[str]:
     """Run `scripts/branch_rule.py` against a live payload written to disk."""
     with tempfile.TemporaryDirectory(prefix="branch-rule-") as tmp:
@@ -481,6 +533,7 @@ PUSH_IGNORABLE = {
     "scripts/round_open.py",
     "scripts/deploy_drift.py",
     "scripts/branch_rule.py",
+    "scripts/pr_matrix.py",
 }
 
 
@@ -945,6 +998,66 @@ class RecurringContractTest(unittest.TestCase):
         renamed = template.replace("## Residual\n", "## Notes\n", 1)
         with self.assertRaises(AssertionError):
             assert_pr_template_carries_the_matrix(self, renamed)
+
+    def test_matrix_parser_reads_a_real_body(self) -> None:
+        """The parser must accept a complete body and every plausible defect."""
+        document = DOC.read_text(encoding="utf-8")
+        good = complete_body(document)
+        self.assertEqual(run_matrix(good, document).returncode, 0)
+
+        def broken(body: str) -> str:
+            done = run_matrix(body, document)
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            return done.stderr
+
+        # Mutation control 1: a whole class row missing — the shape a rushed
+        # round produces, and the one a reviewer skims past.
+        first = target_classes(document)[0]
+        dropped = "\n".join(
+            line for line in good.splitlines() if not line.startswith(f"| {first} ")
+        )
+        self.assertIn("missing class", broken(dropped))
+
+        # Mutation control 2: a row with an empty evidence cell.
+        emptied = good.replace("| ran | ran | ran |", "| ran |  | ran |", 1)
+        self.assertNotEqual(emptied, good)
+        self.assertIn("leaves Boundary empty", broken(emptied))
+
+        # Mutation control 3: `未验证` without a reason is not evidence.
+        vague = complete_body(document, result="未验证")
+        self.assertIn("without a reason", broken(vague))
+        reasoned = complete_body(document, result="未验证 — no Docker here")
+        self.assertEqual(run_matrix(reasoned, document).returncode, 0)
+
+        # Mutation control 4: a ninth-but-wrong column shifts every cell.
+        widened = good.replace(
+            f"| {' | '.join(TARGET_MODE_COLUMNS)} |",
+            f"| {' | '.join(TARGET_MODE_COLUMNS)} | Score |",
+            1,
+        )
+        self.assertIn("header is", broken(widened))
+        self.assertIn("'Score'", broken(widened))
+
+        # Mutation control 5: no matrix section at all.
+        self.assertIn("no `## Matrix`", run_matrix("## Changes\n", document).stderr)
+
+        # A body that opens with the matrix is legal and must still be checked.
+        self.assertEqual(run_matrix(good.split("## Matrix", 1)[1].join(["## Matrix", ""]), document).returncode, 0)
+
+    def test_matrix_step_reads_the_pull_request_body(self) -> None:
+        validate = workflow("validate.yml")
+        assert_matrix_gate_is_wired(self, validate)
+
+        # The protocol must name the gate, or the rule and its enforcement
+        # drift apart and neither is believed.
+        self.assertIn("scripts/pr_matrix.py", TARGET_MODE.read_text(encoding="utf-8"))
+
+        # Mutation control: a step that checks a checked-out file instead of the
+        # API body lets the PR carry a table nobody read.
+        local = validate.replace("gh api", "cat", 1)
+        self.assertNotEqual(local, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, local)
 
     def test_contract_mutation_removes_authoritative_field(self) -> None:
         text = DOC.read_text(encoding="utf-8")
