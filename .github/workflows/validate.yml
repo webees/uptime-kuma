@@ -88,13 +88,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           : "${PR:?a pull request number is required}"
+          : "${BASE:?a base commit is required}"
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq .body \
             > "$RUNNER_TEMP/body.md"
           test -s "$RUNNER_TEMP/body.md"
           python3 scripts/pr_matrix.py "$RUNNER_TEMP/body.md" docs/recurring_issues.md
+          # The audit baseline must already reach the branch this PR lands on.
+          # The round's own commits stay past the baseline by design: the
+          # matrix above is their evidence. Only the PR path carries a base,
+          # and only there is the gate meaningful.
+          python3 scripts/round_open.py --require-closed --entry "$BASE"
 
       - name: 🐳 Build and exercise the image
         run: |

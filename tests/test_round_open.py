@@ -64,12 +64,14 @@ def doc(baseline: str | None) -> str:
     return f"# Issues\n\n{line}\n## Host Policy\n\n### body\n"
 
 
-def run(document: str, script: Path = SCRIPT) -> subprocess.CompletedProcess[str]:
+def run(
+    document: str, script: Path = SCRIPT, *args: str
+) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "issues.md"
         path.write_text(document, encoding="utf-8")
         return subprocess.run(
-            [sys.executable, str(script)],
+            [sys.executable, str(script), *args],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -118,6 +120,57 @@ class RoundOpenTest(unittest.TestCase):
         result = run(doc(BASE[:7]))
         self.assertIn(f"baseline commit: `{BASE[:7]}`", result.stdout)
 
+    def test_require_closed_rejects_an_open_round(self) -> None:
+        """The count only gated anything once this exit code existed."""
+        result = run(doc(BASE), SCRIPT, "--require-closed")
+        self.assertEqual(result.returncode, 3, result.stdout)
+        self.assertIn("still reachable past the baseline", result.stderr)
+        self.assertIn(f"commits past the baseline, to audit this round: {OWED}", result.stdout)
+
+    def test_require_closed_accepts_a_closed_round(self) -> None:
+        result = run(doc(HEAD), SCRIPT, "--require-closed")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("to audit this round: 0", result.stdout)
+
+    def test_require_closed_still_fails_closed_on_a_bad_baseline(self) -> None:
+        self.assertEqual(run(doc(None), SCRIPT, "--require-closed").returncode, 1)
+        self.assertEqual(run(doc("0" * 40), SCRIPT, "--require-closed").returncode, 2)
+
+    def test_unknown_argument_is_refused(self) -> None:
+        result = run(doc(BASE), SCRIPT, "--require-closd")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("unknown argument", result.stderr)
+
+    def test_entry_at_the_baseline_is_closed(self) -> None:
+        """The shape a clean PR has: the base branch tip is the baseline."""
+        result = run(doc(BASE), SCRIPT, "--require-closed", "--entry", BASE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("which this round cannot cover: 0", result.stdout)
+
+    def test_entry_behind_the_baseline_is_closed(self) -> None:
+        """Boundary: an older base still leaves nothing unaudited."""
+        result = run(doc(BASE), SCRIPT, "--require-closed", "--entry", f"{BASE}~1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("which this round cannot cover: 0", result.stdout)
+
+    def test_entry_ahead_of_the_baseline_fails(self) -> None:
+        """Unaudited commits already on the base branch cannot be covered by
+        this round's matrix, so the gate has to refuse the merge."""
+        result = run(doc(BASE), SCRIPT, "--require-closed", "--entry", HEAD)
+        self.assertEqual(result.returncode, 3, result.stdout)
+        self.assertIn(f"which this round cannot cover: {OWED}", result.stdout)
+        self.assertIn(f"{OWED} commit(s) still reachable past the baseline", result.stderr)
+
+    def test_entry_without_a_value_is_refused(self) -> None:
+        result = run(doc(BASE), SCRIPT, "--require-closed", "--entry")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("--entry needs a ref", result.stderr)
+
+    def test_unresolvable_entry_fails_closed(self) -> None:
+        result = run(doc(BASE), SCRIPT, "--require-closed", "--entry", "0" * 40)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("entry", result.stderr)
+
 
 class RoundOpenMutationTest(unittest.TestCase):
     """Remove the derivation in turn; the count stops meaning anything."""
@@ -128,7 +181,7 @@ class RoundOpenMutationTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def mutate(
-        self, *replacements: tuple[str, str], baseline: str = BASE
+        self, *replacements: tuple[str, str], baseline: str = BASE, args: tuple[str, ...] = ()
     ) -> subprocess.CompletedProcess[str]:
         text = self.source
         for old, new in replacements:
@@ -136,7 +189,36 @@ class RoundOpenMutationTest(unittest.TestCase):
             text = text.replace(old, new, 1)
         script = Path(self.tmp.name) / "mutated.py"
         script.write_text(text, encoding="utf-8")
-        return run(doc(baseline), script)
+        return run(doc(baseline), script, *args)
+
+    def test_without_the_gate_the_open_round_exits_zero(self) -> None:
+        """Mutation control for the gate itself: drop the exit code, not the count."""
+        dropped = self.mutate(
+            ("if require_closed:", "if False:"),
+            args=("--require-closed",),
+        )
+        self.assertEqual(dropped.returncode, 0, dropped.stderr)
+        self.assertIn(f"to audit this round: {OWED}", dropped.stdout)
+
+    def test_gate_that_ignores_the_count_never_fires(self) -> None:
+        inverted = self.mutate(
+            ('if missing != "0":', 'if missing == "0":'),
+            args=("--require-closed",),
+            baseline=HEAD,
+        )
+        self.assertEqual(inverted.returncode, 3, inverted.stdout)
+
+    def test_gate_measuring_head_would_block_every_round(self) -> None:
+        """Mutation control for the entry ref: count the round's own commits.
+
+        They are past the baseline by design, so a gate on them never passes
+        and a reader deletes the step instead of fixing the baseline.
+        """
+        result = self.mutate(
+            ("missing = gap if gap is not None else owed", "missing = owed"),
+            args=("--require-closed", "--entry", BASE),
+        )
+        self.assertEqual(result.returncode, 3, result.stdout)
 
     def test_without_the_baseline_lookup_nothing_is_owed(self) -> None:
         """Left alone, the range falls back to all of `HEAD`."""

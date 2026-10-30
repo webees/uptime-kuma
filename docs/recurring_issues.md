@@ -13,11 +13,12 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `62b456d` on 2026-10-30,
-extending the previous baseline at `5a0d40c`. Every later round must extend that
+Audit baseline: every commit reachable through `915e72f` on 2026-10-30,
+extending the previous baseline at `62b456d`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
-derives it and prints how far `HEAD` has moved past the baseline.
+derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
+has not reached the branch it lands on.
 
 ## Target-Mode Prompt
 
@@ -36,6 +37,15 @@ score, merge, deploy, or claim completion while any row lacks evidence or has an
 unclassified residual. Record the matrix in the PR or final report without
 creating per-round files. The matrix is a review artifact, not a score: a
 passing row requires observed command or test output.
+
+The matrix covers the round's own commits and nothing else. Commits that are
+already on `main` have no row here, so the same `validate` step also runs
+`python3.13 scripts/round_open.py --require-closed --entry "$BASE"` and fails
+when the audit baseline has not reached the pull request's base commit.
+Reporting the owed count was advisory before: a round could read it, merge
+anyway and hand the debt onward. The gate is what makes the baseline a rule.
+The count past `HEAD` is not the gate, because the round's own commits are
+always past the baseline by design.
 
 ## Every-Round Goal Gate
 
