@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: all 84 commits reachable through `3cf7388` on 2026-10-30,
-extending the previous 83-commit baseline at `b4a17f7`. Every later round must
+Audit baseline: all 86 commits reachable through `e857fc4` on 2026-10-30,
+extending the previous 84-commit baseline at `3cf7388`. Every later round must
 extend that audit to every commit reachable at its start.
 
 ## Target-Mode Prompt
@@ -293,6 +293,9 @@ only on a positive, well-formed upgrade count. A zero count skips the chain, so
 the deploy stays on the last verified digest. Probe failure, a malformed count,
 and an unresolvable `latest` fail closed instead of reading as "no changes".
 Push, tag, and manual events are real changes and bypass the probe.
+The probe is otherwise only reachable on Mondays, so `workflow_dispatch`
+carries a `mode` choice: `force` (default) publishes unconditionally and `probe`
+runs the scheduled decision, which keeps the skip path exercisable on demand.
 
 Publication history: the metadata step used to write `latest` before the image
 existed, so the mutable tag moved even when the digest smoke test, the deploy,
