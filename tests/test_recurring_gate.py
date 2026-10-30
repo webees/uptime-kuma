@@ -206,8 +206,12 @@ def assert_target_mode_is_actionable(
     # hash or a deleted case reads exactly like proof.
     case.assertIn("which is not a commit", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("Mutation control names missing", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    # A commit that resolves is not enough: after a squash merge the branch
+    # commit is gone from `main`, so the row must cite something reachable.
+    case.assertIn("reachable from HEAD; a squash merge", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     # The protocol has to say so too, or the writer follows the old advice.
     case.assertIn("`git cat-file` cannot resolve", found["Matrix"])
+    case.assertIn("not reachable from\n  `HEAD`", found["Matrix"])
     case.assertIn("deleted file or a deleted case", found["Matrix"])
 
     # The rejection list is the thing that voids a round; a subset is not one.
@@ -1114,7 +1118,9 @@ class RecurringContractTest(unittest.TestCase):
         # Control: the writer advice reverts to the word that used to pass.
         vague_advice = mode.replace(
             "A bare `n/a` is not a classification and `validate` rejects it, as does a hash\n"
-            "  that `git cat-file` cannot resolve.",
+            "  that `git cat-file` cannot resolve or that resolves but is not reachable from\n"
+            "  `HEAD`: a squash merge drops the branch commit, so such a row only passes on\n"
+            "  the clone that still holds the branch.",
             "A bare `n/a` is accepted.",
             1,
         )
@@ -1358,6 +1364,13 @@ class RecurringContractTest(unittest.TestCase):
         # exist; `deadbee` and a deleted case both read as proof.
         gone_hash = broken(replace_row(good, "History", "unchanged, `git log -Sx` → `deadbee`"))
         self.assertIn("which is not a commit", gone_hash)
+        # A commit that resolves only because the local clone still holds the
+        # branch is not enough: after a squash merge CI sees a different main
+        # and the row fails there (#54). The cited commit must be reachable.
+        off_branch = broken(
+            replace_row(good, "History", "unchanged, `git log -Sx` → `1ca77e4`")
+        )
+        self.assertIn("not reachable from HEAD", off_branch)
         gone_case = broken(
             replace_row(
                 good,
@@ -1397,10 +1410,20 @@ class RecurringContractTest(unittest.TestCase):
         without_hash = run_mutated_matrix(
             replace_row(good, "History", "unchanged, `git log -Sx` → `deadbee`"),
             document,
-            [("            if sha in unresolved([sha]):",
-              "            if False and sha in unresolved([sha]):")],
+            # Blanking the whole lookup drops the ghost and the reachability
+            # probe together, so `deadbee` reads as a real commit again.
+            [("        cited = COMMIT.findall(history)", "        cited = []")],
         )
         self.assertEqual(without_hash.returncode, 0, without_hash.stderr)
+
+        # Reachability is a separate lookup from resolution: dropping only it
+        # brings back the off-branch commit, which the local clone still holds.
+        without_reach = run_mutated_matrix(
+            replace_row(good, "History", "unchanged, `git log -Sx` → `1ca77e4`"),
+            document,
+            [("        stale = set(unreachable(alive))", "        stale = set()")],
+        )
+        self.assertEqual(without_reach.returncode, 0, without_reach.stderr)
 
         without_case = run_mutated_matrix(
             replace_row(

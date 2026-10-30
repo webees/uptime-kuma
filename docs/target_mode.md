@@ -98,7 +98,9 @@ One row per class, always these eight columns, in this order:
 - `History` is the `git log -S` / `git log -G` classification plus the commit
   it rests on — `unchanged, git log -Sx → abc1234`, `regressed by abcdef1`.
   A bare `n/a` is not a classification and `validate` rejects it, as does a hash
-  that `git cat-file` cannot resolve.
+  that `git cat-file` cannot resolve or that resolves but is not reachable from
+  `HEAD`: a squash merge drops the branch commit, so such a row only passes on
+  the clone that still holds the branch.
 - `Authoritative guard` is one `path:symbol` pair and has to be one the class
   records under `Authority:`; `validate` rejects another path, a neighbour's
   symbol on a shared file, and a symbol that no longer occurs in that file. Two

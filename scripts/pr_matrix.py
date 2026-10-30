@@ -55,6 +55,13 @@ class Unreadable(Exception):
     """The body has no matrix section to check."""
 
 
+def _git(*args: str) -> str:
+    done = subprocess.run(args, capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise Unreadable(f"{' '.join(args)} failed: {done.stderr.strip()}")
+    return done.stdout
+
+
 def unresolved(hashes: list[str]) -> list[str]:
     """The hashes git cannot turn into a commit, so the row cites a ghost."""
     if not hashes:
@@ -74,6 +81,34 @@ def unresolved(hashes: list[str]) -> list[str]:
         if answer.endswith(" missing"):
             gone.append(sha)
     return gone
+
+
+_REACHABLE: set[str] | None = None
+
+
+def reachable() -> set[str]:
+    """Every commit on this branch, read once: the list is long and stable."""
+    global _REACHABLE
+    if _REACHABLE is None:
+        _REACHABLE = set(_git("git", "rev-list", "HEAD").split())
+    return _REACHABLE
+
+
+def unreachable(hashes: list[str]) -> list[str]:
+    """The hashes that resolve here but are not in this branch's history.
+
+    A squash merge deletes the branch commit, so a row that cites it passes on
+    the author's clone and fails in CI against the merged `main`. Reachability
+    from `HEAD` is what both places share.
+    """
+    if not hashes:
+        return []
+    full = _git("git", "rev-parse", *[f"{sha}^{{commit}}" for sha in hashes])
+    return [
+        sha
+        for sha, commit in zip(hashes, full.split())
+        if commit not in reachable()
+    ]
 
 
 def classes(document: str) -> list[str]:
@@ -219,10 +254,19 @@ def check(
                 f"the commit it rests on, not {history!r}"
             )
         # A hash that does not resolve is worse than none: it reads as proof.
-        for sha in COMMIT.findall(history):
-            if sha in unresolved([sha]):
+        cited = COMMIT.findall(history)
+        gone = unresolved(cited)
+        alive = [sha for sha in cited if sha not in gone]
+        stale = set(unreachable(alive))
+        for sha in cited:
+            if sha in gone:
                 problems.append(
                     f"line {number}: {title!r} History cites {sha}, which is not a commit"
+                )
+            elif sha in stale:
+                problems.append(
+                    f"line {number}: {title!r} History cites {sha}, which is not "
+                    f"reachable from HEAD; a squash merge dropped the branch commit"
                 )
         if control and not RUNNABLE.search(control):
             problems.append(
