@@ -38,7 +38,7 @@ COLUMNS = (
 # stated reason: the protocol's word for "not run" is `未验证`.
 UNVERIFIED = re.compile(r"^(未验证|n/a)\b")
 FRONT_MATTER = {"Target-Mode Prompt", "Every-Round Goal Gate"}
-AUTHORITY = re.compile(r"`([^`:]+):")
+SPAN = re.compile(r"`([^`]+)`")
 # `History` and `Mutation control` are prose columns a row can satisfy with a
 # word. History must carry its classification *and* the commit that supports
 # it; a control must name something runnable, not assert one exists.
@@ -83,13 +83,25 @@ def matrix_rows(body: str) -> list[str]:
 
 
 def authorities(document: str) -> dict[str, list[str]]:
-    """The files each class names as its authority, by class title."""
+    """Every span each class names as its authority, by class title.
+
+    A span is a `path` or a `path:symbol`; both spellings appear in the file,
+    so the path before the first `:` is what a row is compared on.
+    """
     found: dict[str, list[str]] = {}
     for title in classes(document):
-        block = document.split(f"\n## {title}\n", 1)[1].split("\n## ", 1)[0]
-        line = block.split("\nAuthority: ", 1)[-1].split("\n", 1)[0]
-        found[title] = AUTHORITY.findall(line)
+        body = document.split(f"\n## {title}\n", 1)[1].split("\n## ", 1)[0]
+        # The authority paragraph can wrap and several classes continue with
+        # prose full of inline code that is not a path (`main`, `load_status`).
+        # The authority itself is the first sentence, up to the next field.
+        block = body.split("\nAuthority: ", 1)[-1].split("\nMutation control:", 1)[0]
+        found[title] = SPAN.findall(re.split(r"\.(?:\s|$)", block, maxsplit=1)[0])
     return found
+
+
+def paths(spans: list[str]) -> set[str]:
+    """The path part of `path` or `path:symbol`, for comparison."""
+    return {span.split(":")[0] for span in spans}
 
 
 def check(
@@ -140,10 +152,19 @@ def check(
                 f"line {number}: {title!r} Mutation control names nothing "
                 f"runnable: {control!r}"
             )
+        guard = found[COLUMNS.index("Authoritative guard")]
+        if guard:
+            recorded = paths(owned.get(title, []))
+            named = paths(SPAN.findall(guard)) or paths([guard])
+            if not (named & recorded):
+                problems.append(
+                    f"line {number}: {title!r} guard {guard!r} is not the recorded "
+                    f"authority {sorted(recorded)}"
+                )
         if found[-1] and UNVERIFIED.match(found[-1]) and len(found[-1].split()) < 3:
             problems.append(f"line {number}: {title!r} says 未验证 without a reason")
         if touched and found[-1] and UNVERIFIED.match(found[-1]):
-            hit = sorted(set(owned.get(title, [])) & set(touched))
+            hit = sorted(paths(owned.get(title, [])) & set(touched))
             if hit:
                 problems.append(
                     f"line {number}: {title!r} is 未验证 but this PR touches its "
