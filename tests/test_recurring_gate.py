@@ -233,7 +233,9 @@ def assert_matrix_gate_is_wired(case: unittest.TestCase, validate: str) -> None:
 
     `docs/target_mode.md` puts the matrix in the PR body and voids a round
     without one, but a required check that never opens the body enforces it by
-    reviewer attention alone.
+    reviewer attention alone. The same step must prove the audit baseline
+    already reaches the base branch: the round's own commits are past the
+    baseline by design, so `HEAD` alone would gate nothing.
     """
     case.assertIn("scripts/pr_matrix.py", validate)
     case.assertIn("pull-requests: read", validate)
@@ -244,6 +246,11 @@ def assert_matrix_gate_is_wired(case: unittest.TestCase, validate: str) -> None:
     # The body comes from the API, not from a checked-out file a PR can fake.
     case.assertIn("gh api", body)
     case.assertIn(".body", body)
+    # The audit gate runs in the same step and is measured against the base
+    # commit, with the empty value refused rather than read as zero.
+    case.assertIn("scripts/round_open.py --require-closed --entry", body)
+    case.assertIn("github.event.pull_request.base.sha", body)
+    case.assertIn(': "${BASE:?', body)
 
 
 def assert_caller_grants_the_called_permissions(
@@ -1120,6 +1127,31 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(local, validate)
         with self.assertRaises(AssertionError):
             assert_matrix_gate_is_wired(self, local)
+
+        # Mutation control: the gate counted against `HEAD` instead of the base
+        # branch. Every PR commit is past the baseline, so it would fail on
+        # every round and get deleted instead of fixed.
+        head = validate.replace(' --entry "$BASE"', "", 1)
+        self.assertNotEqual(head, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, head)
+
+        # Mutation control: the gate is gone but the matrix check remains, so
+        # the step looks wired while a stale baseline still merges.
+        ungated = validate.replace(
+            '\n          python3 scripts/round_open.py --require-closed --entry "$BASE"', "", 1
+        )
+        self.assertNotEqual(ungated, validate)
+        with self.assertRaises(AssertionError) as missing:
+            assert_matrix_gate_is_wired(self, ungated)
+        self.assertIn("round_open.py", str(missing.exception))
+
+        # Mutation control: without the base, an empty variable reaches the
+        # script as a ref name and the step reads `--entry` with no value.
+        unset = validate.replace(': "${BASE:?a base commit is required}"\n', "", 1)
+        self.assertNotEqual(unset, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, unset)
 
     def test_contract_mutation_removes_authoritative_field(self) -> None:
         text = DOC.read_text(encoding="utf-8")

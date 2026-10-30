@@ -38,6 +38,22 @@ The baseline is a commit that must resolve, not a written count: the commit
 that records a count makes that count wrong. A missing baseline exits `1`, an
 unresolvable one exits `2`, so a typo cannot read as "nothing owed".
 
+The count is reported twice on purpose, because the two numbers answer
+different questions:
+
+- `to audit this round` is everything past the baseline up to `HEAD`. Inside a
+  pull request it is never zero — the round's own commits are exactly that
+  distance, and the matrix is their evidence.
+- `which this round cannot cover` is the same distance measured to the branch
+  the PR lands on. Those commits are already on `main` with no matrix behind
+  them. This is the number that must be `0`.
+
+`validate` therefore runs `--require-closed --entry "$BASE"` inside the
+`🧾 Round matrix` step, where `BASE` is the pull request's base commit. A round
+that opens on a stale baseline fails its own PR instead of merging the debt
+forward. Only the PR path is gated: a `push` build has no base, and the
+`workflow_call` copy would otherwise fail the publish for the same reason.
+
 Then, before any other work:
 
 1. Read `docs/recurring_issues.md` and `tests/test_recurring_gate.py` whole.
