@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: all 89 commits reachable through `8d0e05c` on 2026-10-30,
-extending the previous 88-commit baseline at `954092c`. Every later round must
+Audit baseline: all 91 commits reachable through `08147f8` on 2026-10-30,
+extending the previous 89-commit baseline at `f3c1174`. Every later round must
 extend that audit to every commit reachable at its start.
 
 ## Target-Mode Prompt
@@ -319,10 +319,23 @@ local Docker Desktop allows it. Every local gate therefore stayed green and the
 first real deploy timed out on a crash loop. The listener, `internal_port` and
 the health-check port are one unprivileged value (8080).
 
+The deploy trigger is surface too. `push` rebuilt and redeployed on every
+documentation or test edit, so three consecutive baseline bumps each moved
+`latest` and restarted production for no image change. Final decision: the
+`main` push trigger ignores exactly the paths that cannot reach the image
+(`.gitignore`, `README.md`, `LICENSE`, `.github/**`, `docs/**`, `tests/**`,
+`scripts/rebuild.sh`) and those paths must also be excluded from the build
+context, so the two lists cannot silently disagree. `Dockerfile`, `fly.toml`,
+`config/**`, the entrypoint scripts and `scripts/restic.sh`/`scripts/services.sh`
+stay deployable. GitHub does not path-filter tag pushes, and `schedule` and
+`workflow_dispatch` never see the filter, so releases and the weekly rebuild
+still publish.
+
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
 `.github/workflows/ghcr.yaml:digest`, plus
-`.github/workflows/ghcr.yaml:rebuild_check` with `scripts/rebuild.sh:count`.
+`.github/workflows/ghcr.yaml:rebuild_check` with `scripts/rebuild.sh:count` and
+`.github/workflows/ghcr.yaml:paths-ignore` with `.dockerignore`.
 
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
@@ -342,6 +355,10 @@ stayed healthy), so
 `tests/test_recurring_gate.py:test_deploy_retries_only_transient_errors` pins a
 bounded, digest-idempotent retry with a growing delay, a transient-only filter
 and a fail-closed last attempt.
+The trigger filter has its own control set in
+`tests/test_recurring_gate.py:test_docs_only_changes_skip_the_production_build`:
+removing the filter, ignoring an input the image is built from, and dropping a
+still-needed context entry each turn red.
 The retry only covers the step it lives in, so the toolchain must not depend on
 the same service: the setup action resolved `latest` through a Fly-hosted
 manifest and died there with 503 before any retry ran (run `40959357266`).
@@ -381,6 +398,10 @@ day each fails with its own mutation control.
 The Caddyfile listener must be above 1024 and equal to both
 `http_service.internal_port` and `checks.health.port`; moving the listener back
 to 80, or drifting `internal_port` away from it, each fails on its own control.
+An ignored path must also be absent from the build context and every `COPY`
+source must stay triggerable, so the ignore list and `.dockerignore` cannot
+diverge; a docs edit is required to stay filtered while `scripts/services.sh`
+is required to stay admitted.
 `validate.yml` is both a `workflow_call` target and a standalone workflow, so
 its concurrency group must include the workflow name: keyed only on the ref,
 the nested copy and its standalone twin share a group under
