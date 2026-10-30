@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `1887331` on 2026-10-30,
-extending the previous baseline at `2c5e2cd`. Every later round must extend that
+Audit baseline: every commit reachable through `851f936` on 2026-10-30,
+extending the previous baseline at `1887331`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it and prints how far `HEAD` has moved past the baseline.
@@ -285,6 +285,12 @@ not in the repository, and `GITHUB_TOKEN` cannot read the rule (there is no
 and block every merge. Tracked files and reachable history carry no real
 domain, bucket, token, or machine identifier.
 
+The recorded rule also carries `strict`. Recorded as `false` on 2026-10-30, it
+let a green check earned on an older base satisfy the requirement, so the
+commit that merged was never validated against the commit it ran on. Final
+decision: `strict` is `true`; a stale branch must update and re-run before it
+merges.
+
 Builds publish provenance attestations. They land in the same index as
 `unknown/unknown` children, so the digest step filters on both architecture and
 OS and requires exactly one match; the deploy image therefore stays a real
@@ -445,7 +451,8 @@ shape and a six-hour limit each turn the same test red.
 The required check must name the real job and workflow it is recorded against,
 and admins must stay bound. Renaming the job, mis-titling the workflow,
 unbinding admins, emptying the context list, or dropping a field from the live
-payload each fails on its own control.
+payload each fails on its own control. `strict` must be `true`: recording it as
+`false` passes a stale green and fails on its own control.
 The Caddyfile listener must be above 1024 and equal to both
 `http_service.internal_port` and `checks.health.port`; moving the listener back
 to 80, or drifting `internal_port` away from it, each fails on its own control.

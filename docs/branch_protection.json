@@ -4,7 +4,7 @@
     "contexts": [
       "validate"
     ],
-    "strict": false
+    "strict": true
   },
   "enforce_admins": {
     "enabled": true
