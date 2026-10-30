@@ -293,6 +293,9 @@ only on a positive, well-formed upgrade count. A zero count skips the chain, so
 the deploy stays on the last verified digest. Probe failure, a malformed count,
 and an unresolvable `latest` fail closed instead of reading as "no changes".
 Push, tag, and manual events are real changes and bypass the probe.
+The probe is otherwise only reachable on Mondays, so `workflow_dispatch`
+carries a `mode` choice: `force` (default) publishes unconditionally and `probe`
+runs the scheduled decision, which keeps the skip path exercisable on demand.
 
 Publication history: the metadata step used to write `latest` before the image
 existed, so the mutable tag moved even when the digest smoke test, the deploy,

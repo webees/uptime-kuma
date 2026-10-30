@@ -106,6 +106,8 @@ The weekly schedule is conditional: `rebuild_check` probes the packages pending
 in the published `latest` image and the build only runs when that count is
 positive. A current image therefore costs one short probe instead of a build and
 a deploy, and a probe failure fails the run rather than silently skipping it.
+`workflow_dispatch` defaults to `force`, so a manual run still publishes
+immediately; choose `probe` to exercise the scheduled decision by hand.
 
 `Validate` is a required status check on `main`; a commit that fails it cannot
 merge (see [Residual risk](#-residual-risk)).

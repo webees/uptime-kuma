@@ -291,7 +291,11 @@ def assert_scheduled_rebuild_needs_drift(case: unittest.TestCase, build: str, sc
     # Only scheduled runs fan out through the decision job.
     case.assertIn("needs: [rebuild_check, validate]", build)
     gate = build.split("rebuild_check:", 1)[1].split("  build:", 1)[0]
-    case.assertIn("if [ \"$GITHUB_EVENT_NAME\" = schedule ]; then", gate)
+    case.assertIn('[ "$GITHUB_EVENT_NAME" = schedule ]', gate)
+    # A manual run cannot normally reach the probe, so it carries a `probe`
+    # mode; the default stays `force` and must not be probed.
+    case.assertIn("MODE: ${{ inputs.mode || 'force' }}", build)
+    case.assertIn('"$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$MODE" = probe ]', gate)
     case.assertIn('"${REGISTRY}/${IMAGE_NAME}:latest"', gate)
     case.assertIn('[[ "$count" =~ ^[0-9]+$ ]]', gate)
     case.assertIn('if [ "$count" -ne 0 ]; then', gate)
@@ -782,6 +786,17 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(unchecked, workflow("ghcr.yaml"))
         with self.assertRaises(AssertionError):
             assert_scheduled_rebuild_needs_drift(self, unchecked, REBUILD.read_text(encoding="utf-8"))
+
+        # Third control: drop the `probe` branch, so the manual mode becomes a
+        # no-op and the decision code is never exercised outside the cron.
+        unprobeable = workflow("ghcr.yaml").replace(
+            '{ [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$MODE" = probe ]; }',
+            "false",
+            1,
+        )
+        self.assertNotEqual(unprobeable, workflow("ghcr.yaml"))
+        with self.assertRaises(AssertionError):
+            assert_scheduled_rebuild_needs_drift(self, unprobeable, REBUILD.read_text(encoding="utf-8"))
 
     def test_deploy_retries_only_transient_errors(self) -> None:
         build = workflow("ghcr.yaml")

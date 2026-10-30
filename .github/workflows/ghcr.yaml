@@ -1,7 +1,18 @@
 name: 🐳 Docker (Multi-Arch)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      # `force` skips the rebuild probe and publishes unconditionally, which is
+      # what a manual run normally wants. `probe` runs the scheduled decision,
+      # so the skip path stays exercisable between Mondays.
+      mode:
+        description: "Rebuild decision"
+        type: choice
+        default: force
+        options:
+          - force
+          - probe
   # Weekly rebuild so base-image and OS-package security fixes ship without a
   # code change. Scheduled runs use `main` HEAD and go through the same
   # validate -> build -> deploy chain; only PR-only steps are skipped.
@@ -40,7 +51,9 @@ jobs:
           persist-credentials: false
 
       - name: 🔐 Log into registry ${{ env.REGISTRY }}
-        if: github.event_name == 'schedule'
+        if: >-
+          github.event_name == 'schedule' ||
+          (github.event_name == 'workflow_dispatch' && inputs.mode == 'probe')
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -49,10 +62,13 @@ jobs:
 
       - name: 🤔 Decide whether the scheduled rebuild is needed
         id: decision
+        env:
+          MODE: ${{ inputs.mode || 'force' }}
         run: |
           set -euo pipefail
           needed=true
-          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+          if [ "$GITHUB_EVENT_NAME" = schedule ] ||
+            { [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$MODE" = probe ]; }; then
             needed=false
             out="$(DEPS_DOCKER_TIMEOUT=300 scripts/rebuild.sh count "${REGISTRY}/${IMAGE_NAME}:latest")"
             printf '%s\n' "$out"
