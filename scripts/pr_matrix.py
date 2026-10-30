@@ -266,7 +266,8 @@ def check(
             elif sha in stale:
                 problems.append(
                     f"line {number}: {title!r} History cites {sha}, which is not "
-                    f"reachable from HEAD; a squash merge dropped the branch commit"
+                    f"reachable from HEAD, so only the clone that still holds it "
+                    f"can show it; a squash merge drops the branch commit this way"
                 )
         if control and not RUNNABLE.search(control):
             problems.append(

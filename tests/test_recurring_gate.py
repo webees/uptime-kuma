@@ -208,7 +208,7 @@ def assert_target_mode_is_actionable(
     case.assertIn("Mutation control names missing", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     # A commit that resolves is not enough: after a squash merge the branch
     # commit is gone from `main`, so the row must cite something reachable.
-    case.assertIn("reachable from HEAD; a squash merge", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    case.assertIn("reachable from HEAD, so only the clone", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     # The protocol has to say so too, or the writer follows the old advice.
     case.assertIn("`git cat-file` cannot resolve", found["Matrix"])
     case.assertIn("not reachable from\n  `HEAD`", found["Matrix"])
@@ -252,6 +252,34 @@ def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
         for title in target_classes(document)
     )
     return f"## Conclusion\n\nx\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n|{'---|' * len(TARGET_MODE_COLUMNS)}\n{rows}\n\n## Changes\n\nx\n"
+
+
+def dangling_commit() -> str:
+    """A commit object that exists but no branch points at.
+
+    `1ca77e4` is such a commit here, but a CI checkout only fetches what the
+    branch reaches, so naming it works on one machine and not the other. This
+    builds the condition locally: `git commit-tree` writes a real commit, then
+    drops the only name for it.
+    """
+    stamp = "2000-01-01T00:00:00Z"
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "round",
+        "GIT_AUTHOR_EMAIL": "round@example.org",
+        "GIT_AUTHOR_DATE": stamp,
+        "GIT_COMMITTER_NAME": "round",
+        "GIT_COMMITTER_EMAIL": "round@example.org",
+        "GIT_COMMITTER_DATE": stamp,
+    }
+    return subprocess.run(
+        ["git", "commit-tree", "HEAD^{tree}", "-m", "dangling"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
 
 
 def target_classes(document: str) -> list[str]:
@@ -1364,11 +1392,12 @@ class RecurringContractTest(unittest.TestCase):
         # exist; `deadbee` and a deleted case both read as proof.
         gone_hash = broken(replace_row(good, "History", "unchanged, `git log -Sx` → `deadbee`"))
         self.assertIn("which is not a commit", gone_hash)
-        # A commit that resolves only because the local clone still holds the
-        # branch is not enough: after a squash merge CI sees a different main
-        # and the row fails there (#54). The cited commit must be reachable.
+        # A commit that resolves is not enough: after a squash merge CI sees a
+        # different main and the row fails there (#54). `1ca77e4` showed that,
+        # but only on the clone that still held it, so the case builds the
+        # condition instead of borrowing one machine's objects.
         off_branch = broken(
-            replace_row(good, "History", "unchanged, `git log -Sx` → `1ca77e4`")
+            replace_row(good, "History", f"unchanged, `git log -Sx` → `{dangling_commit()}`")
         )
         self.assertIn("not reachable from HEAD", off_branch)
         gone_case = broken(
@@ -1419,7 +1448,7 @@ class RecurringContractTest(unittest.TestCase):
         # Reachability is a separate lookup from resolution: dropping only it
         # brings back the off-branch commit, which the local clone still holds.
         without_reach = run_mutated_matrix(
-            replace_row(good, "History", "unchanged, `git log -Sx` → `1ca77e4`"),
+            replace_row(good, "History", f"unchanged, `git log -Sx` → `{dangling_commit()}`"),
             document,
             [("        stale = set(unreachable(alive))", "        stale = set()")],
         )
