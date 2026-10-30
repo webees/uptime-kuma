@@ -730,6 +730,15 @@ def assert_cleanup_runs_and_cannot_race(case: unittest.TestCase, cleanup: str, b
     case.assertRegex(cleanup, r"(?m)^\s+keep-n-tagged:\s+[1-9]\d*$")
     case.assertIn("delete-untagged: true", cleanup)
 
+    # Serialising with the publish cuts both ways: this job holds the shared
+    # group while it runs, so an unbounded cleanup (the default is six hours)
+    # leaves the next deploy queued behind it. A floating `ubuntu-latest` also
+    # moves the runner image under the action without a commit.
+    case.assertIn("    runs-on: ubuntu-24.04\n", cleanup)
+    limit = re.search(r"(?m)^    timeout-minutes:\s*([1-9]\d*)$", cleanup)
+    case.assertIsNotNone(limit, "cleanup needs a job timeout so it cannot pin the publish group")
+    case.assertLessEqual(int(limit.group(1)), 30, "a cleanup that runs longer than half an hour blocks publishes")
+
 
 def assert_validate_concurrency_is_distinct(case: unittest.TestCase, validate: str, build: str) -> None:
     """A reused workflow must not share its caller's group key.
@@ -1317,6 +1326,22 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(one_day, cleanup)
         with self.assertRaises(AssertionError):
             assert_cleanup_runs_and_cannot_race(self, one_day, build)
+
+        # Mutation control 4: the exact shape this file shipped in — a floating
+        # runner label and no job timeout at all.
+        shipped = cleanup.replace("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-latest\n", 1)
+        shipped = shipped.replace("    timeout-minutes: 15\n", "", 1)
+        self.assertNotEqual(shipped, cleanup)
+        with self.assertRaises(AssertionError) as caught:
+            assert_cleanup_runs_and_cannot_race(self, shipped, build)
+        self.assertIn("ubuntu-24.04", str(caught.exception))
+
+        # Mutation control 5: a timeout long enough to outlast a whole publish
+        # window keeps the queue blocked for six hours just the same.
+        six_hours = cleanup.replace("    timeout-minutes: 15\n", "    timeout-minutes: 360\n", 1)
+        self.assertNotEqual(six_hours, cleanup)
+        with self.assertRaises(AssertionError):
+            assert_cleanup_runs_and_cannot_race(self, six_hours, build)
 
     def test_validate_does_not_cancel_the_publish_run(self) -> None:
         validate = workflow("validate.yml")

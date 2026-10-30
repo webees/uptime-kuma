@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `c0ce857` on 2026-10-30,
-extending the previous baseline at `67e1902`. Every later round must extend that
+Audit baseline: every commit reachable through `2c5e2cd` on 2026-10-30,
+extending the previous baseline at `9cdd04f`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it and prints how far `HEAD` has moved past the baseline.
@@ -317,6 +317,14 @@ therefore also runs on every `main` push, shares the publish concurrency group
 so it queues instead of deleting a `build-<run>-<attempt>` tag mid-verify, and
 keeps a window long enough for a stalled review plus `keep-n-tagged` as a floor.
 
+Sharing that group cuts both ways: the cleanup job holds it for as long as it
+runs, so an unbounded cleanup queues every publish behind it — and a job with no
+`timeout-minutes` inherits six hours. Final decision: the cleanup job carries an
+explicit `timeout-minutes` of at most 30 and a pinned `ubuntu-24.04` runner, so
+the hold is bounded and the runner image cannot move under the action without a
+commit. `28053c3` added the shared group and left both out; the regression test
+caught it as a missing guard rather than a taste question.
+
 The listener port is part of the same surface: the container runs Caddy as the
 unprivileged `node` user, and a Fly machine refuses `bind :80` with EACCES while
 local Docker Desktop allows it. Every local gate therefore stayed green and the
@@ -354,7 +362,8 @@ Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/ghcr.yaml:digest`, plus
 `.github/workflows/ghcr.yaml:rebuild_check` with `scripts/rebuild.sh:count` and
 `.github/workflows/ghcr.yaml:paths-ignore` with `.dockerignore`, and
-`.github/workflows/deploy-drift.yml` with `scripts/deploy_drift.py:check`.
+`.github/workflows/deploy-drift.yml` with `scripts/deploy_drift.py:check`, and
+`.github/workflows/ghcr-cleanup.yml:cleanup`.
 
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
@@ -413,7 +422,10 @@ Cleanup must keep exactly one cron entry, keep the `main` push trigger, share
 the publish concurrency group with `cancel-in-progress: false`, and hold an
 `older-than` window of at least 7 days plus a `keep-n-tagged` floor. Dropping
 the push trigger, giving cleanup its own group, or tightening the window to a
-day each fails with its own mutation control.
+day each fails with its own mutation control. Because that shared group is held
+for the whole job, the cleanup must also pin `ubuntu-24.04` and declare a
+`timeout-minutes` of at most 30; the shipped `ubuntu-latest`-without-timeout
+shape and a six-hour limit each turn the same test red.
 The Caddyfile listener must be above 1024 and equal to both
 `http_service.internal_port` and `checks.health.port`; moving the listener back
 to 80, or drifting `internal_port` away from it, each fails on its own control.

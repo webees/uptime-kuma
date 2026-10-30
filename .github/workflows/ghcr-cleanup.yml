@@ -26,7 +26,13 @@ permissions:
 
 jobs:
   cleanup:
-    runs-on: ubuntu-latest
+    # Pinned, like every other job here: `ubuntu-latest` moves the runner image
+    # under the action without a commit.
+    runs-on: ubuntu-24.04
+    # This job holds the group shared with the publish workflow, so an
+    # unbounded run (the default limit is six hours) queues every deploy
+    # behind it. Fifteen minutes is well above the observed pruning time.
+    timeout-minutes: 15
     steps:
       - name: 🔍 Cleanup GHCR
         uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1
