@@ -184,6 +184,11 @@ def assert_target_mode_is_actionable(
     case.assertIn('f"{baseline}..HEAD"', round_open)
     case.assertIn("commits past the baseline, to audit this round", round_open)
     case.assertIn('"merge-base", "--is-ancestor", previous, baseline', round_open)
+    # The pair of hashes is written in one edit, so the recorded predecessor
+    # has to come from the base commit; otherwise the document certifies its
+    # own chain and any older ancestor looks legitimate.
+    case.assertIn('"show", f"{ref}:docs/recurring_issues.md"', round_open)
+    case.assertIn("continues(previous.group(1), recorded_baseline(entry))", round_open)
 
     # The rejection list is the thing that voids a round; a subset is not one.
     for clause in ("a matrix column or row is missing",
@@ -1044,6 +1049,17 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(unchecked, round_open)
         with self.assertRaises(AssertionError):
             assert_target_mode_is_actionable(self, mode, issues, unchecked)
+
+        # Seventh control: the predecessor is compared only against itself, so
+        # the base branch is never consulted and a self-written pair passes.
+        self_certified = round_open.replace(
+            "continues(previous.group(1), recorded_baseline(entry))",
+            "continues(previous.group(1), previous.group(1))",
+            1,
+        )
+        self.assertNotEqual(self_certified, round_open)
+        with self.assertRaises(AssertionError):
+            assert_target_mode_is_actionable(self, mode, issues, self_certified)
 
     def test_pr_template_carries_the_matrix(self) -> None:
         """A required section that is not prefilled is the one that gets skipped."""

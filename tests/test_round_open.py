@@ -8,6 +8,7 @@ so the script has to resolve the baseline and count what still lies past it.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,28 @@ def _base() -> str:
 
 
 BASE = _base()
+
+
+def recorded(ref: str) -> str:
+    """The baseline committed at `ref` — what a real round has to extend."""
+    shown = subprocess.run(
+        ["git", "show", f"{ref}:docs/recurring_issues.md"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    found = re.search(
+        r"(?m)^Audit baseline: every commit reachable through `([0-9a-f]{7,40})`", shown
+    )
+    assert found is not None
+    return found.group(1)
+
+
+# The predecessor a round opening on `BASE` would legitimately name.
+RECORDED = recorded(BASE)
+
+
 TOTAL = subprocess.run(
     ["git", "rev-list", "--count", "HEAD"],
     cwd=ROOT,
@@ -59,9 +82,7 @@ OWED = subprocess.run(
 ).stdout.strip()
 
 
-def doc(
-    baseline: str | None, previous: str | None = BASE
-) -> str:
+def doc(baseline: str | None, previous: str | None = RECORDED) -> str:
     """A real baseline paragraph, including the one it claims to extend."""
     if baseline is None:
         return "# Issues\n\n## Host Policy\n\n### body\n"
@@ -148,24 +169,29 @@ class RoundOpenTest(unittest.TestCase):
         self.assertIn("unknown argument", result.stderr)
 
     def test_entry_at_the_baseline_is_closed(self) -> None:
-        """The shape a clean PR has: the base branch tip is the baseline."""
-        result = run(doc(BASE), SCRIPT, "--require-closed", "--entry", BASE)
+        """The shape a clean round has: the baseline is the base commit and the
+        base records exactly the predecessor it extends."""
+        result = run(doc(BASE, recorded(BASE)), SCRIPT, "--require-closed", "--entry", BASE)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("which this round cannot cover: 0", result.stdout)
 
-    def test_entry_behind_the_baseline_is_closed(self) -> None:
-        """Boundary: an older base still leaves nothing unaudited."""
-        result = run(doc(BASE), SCRIPT, "--require-closed", "--entry", f"{BASE}~1")
+    def test_a_baseline_past_the_base_still_covers_it(self) -> None:
+        """A round that audited further than its base owes nothing there."""
+        result = run(doc(HEAD, RECORDED), SCRIPT, "--require-closed", "--entry", BASE)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("which this round cannot cover: 0", result.stdout)
 
     def test_entry_ahead_of_the_baseline_fails(self) -> None:
         """Unaudited commits already on the base branch cannot be covered by
         this round's matrix, so the gate has to refuse the merge."""
-        result = run(doc(BASE), SCRIPT, "--require-closed", "--entry", HEAD)
+        result = run(doc(RECORDED, RECORDED), SCRIPT, "--require-closed", "--entry", BASE)
         self.assertEqual(result.returncode, 3, result.stdout)
-        self.assertIn(f"which this round cannot cover: {OWED}", result.stdout)
-        self.assertIn(f"{OWED} commit(s) still reachable past the baseline", result.stderr)
+        gap = subprocess.run(
+            ["git", "rev-list", "--count", f"{RECORDED}..{BASE}"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        self.assertIn(f"which this round cannot cover: {gap}", result.stdout)
+        self.assertIn(f"{gap} commit(s) still reachable past the baseline", result.stderr)
 
     def test_entry_without_a_value_is_refused(self) -> None:
         result = run(doc(BASE), SCRIPT, "--require-closed", "--entry")
@@ -215,6 +241,34 @@ class RoundOpenTest(unittest.TestCase):
         )
         result = run(document)
         self.assertEqual(result.returncode, 4, result.stdout)
+
+    def test_predecessor_must_be_the_one_the_base_records(self) -> None:
+        """Both hashes are written in one edit, so the document can only
+        certify itself. The base commit has to record the predecessor too."""
+        # A real ancestor of `BASE`, but not the one the base records.
+        older = subprocess.run(
+            ["git", "rev-parse", f"{BASE}~1"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        result = run(doc(BASE, older), SCRIPT, "--require-closed", "--entry", BASE)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("is not the baseline recorded at the base commit", result.stderr)
+
+    def test_report_mode_still_checks_the_recorded_predecessor(self) -> None:
+        """Without `--entry` there is no base to compare, so any ancestor pair
+        is accepted — the check is the gate's, not the printer's."""
+        self.assertEqual(run(doc(HEAD, BASE)).returncode, 0)
+
+    def test_base_without_a_recorded_baseline_exits_five(self) -> None:
+        """The first commit of a repository has nothing to extend, and a round
+        opening on it cannot infer one."""
+        root = subprocess.run(
+            ["git", "rev-list", "--max-parents=0", "HEAD"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.split()[0]
+        result = run(doc(BASE, recorded(BASE)), SCRIPT, "--require-closed", "--entry", root)
+        self.assertEqual(result.returncode, 5, result.stdout)
+        self.assertIn("records no audit baseline", result.stderr)
 
 
 class RoundOpenMutationTest(unittest.TestCase):
@@ -266,6 +320,8 @@ class RoundOpenMutationTest(unittest.TestCase):
         result = self.mutate(
             ("missing = gap if gap is not None else owed", "missing = owed"),
             args=("--require-closed", "--entry", BASE),
+            baseline=BASE,
+            previous=recorded(BASE),
         )
         self.assertEqual(result.returncode, 3, result.stdout)
 
@@ -300,6 +356,24 @@ class RoundOpenMutationTest(unittest.TestCase):
             previous=BASE,
         )
         self.assertEqual(reversed_.returncode, 2, reversed_.stdout)
+
+    def test_without_the_recorded_check_the_pair_certifies_itself(self) -> None:
+        """Mutation control for the base comparison: drop it and any ancestor
+        becomes an acceptable predecessor, including one nobody audited."""
+        older = subprocess.run(
+            ["git", "rev-parse", f"{BASE}~1"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        # Blanked rather than deleted: the `except Missing` clause must keep a
+        # body, and an unreachable `pass` expresses "checked nothing" better.
+        self_check = self.mutate(
+            ("            continues(previous.group(1), recorded_baseline(entry))",
+             "            pass"),
+            baseline=BASE,
+            previous=older,
+            args=("--require-closed", "--entry", BASE),
+        )
+        self.assertEqual(self_check.returncode, 0, self_check.stderr)
 
     def test_without_the_baseline_lookup_nothing_is_owed(self) -> None:
         """Left alone, the range falls back to all of `HEAD`."""
