@@ -102,6 +102,11 @@ and re-read to prove both the index and its amd64 child still match. A failed,
 cancelled, or unverified build therefore leaves `latest` on the last good
 image; `latest` is a convenience reference, never the deploy input.
 
+The weekly schedule is conditional: `rebuild_check` probes the packages pending
+in the published `latest` image and the build only runs when that count is
+positive. A current image therefore costs one short probe instead of a build and
+a deploy, and a probe failure fails the run rather than silently skipping it.
+
 `Validate` is a required status check on `main`; a commit that fails it cannot
 merge (see [Residual risk](#-residual-risk)).
 

@@ -6,8 +6,10 @@ from __future__ import annotations
 import re
 import json
 import os
+import stat
 from pathlib import Path
 import subprocess
+import tempfile
 import tomllib
 import unittest
 
@@ -16,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs/recurring_issues.md"
 DOCKERFILE = ROOT / "Dockerfile"
 WORKFLOWS = ROOT / ".github/workflows"
+REBUILD = ROOT / "scripts/rebuild.sh"
 
 RECURRING_GOAL_GATE_CLAUSES = (
     "Every new, resumed, review, optimization, scoring, release, and post-merge round",
@@ -278,6 +281,98 @@ def assert_latest_follows_verification(case: unittest.TestCase, build: str) -> N
         )
 
 
+def assert_scheduled_rebuild_needs_drift(case: unittest.TestCase, build: str, script: str) -> None:
+    """A cron that rebuilds unconditionally spends a deploy on a current image.
+
+    The scheduled run must therefore probe the *published* image and continue
+    only on a positive, well-formed upgrade count; a failed probe has to fail
+    closed instead of silently reading as "no changes".
+    """
+    # Only scheduled runs fan out through the decision job.
+    case.assertIn("needs: [rebuild_check, validate]", build)
+    gate = build.split("rebuild_check:", 1)[1].split("  build:", 1)[0]
+    case.assertIn("if [ \"$GITHUB_EVENT_NAME\" = schedule ]; then", gate)
+    case.assertIn('"${REGISTRY}/${IMAGE_NAME}:latest"', gate)
+    case.assertIn('[[ "$count" =~ ^[0-9]+$ ]]', gate)
+    case.assertIn('if [ "$count" -ne 0 ]; then', gate)
+    case.assertIn("needed=true", gate.split("if [ \"$GITHUB_EVENT_NAME\" = schedule ]", 1)[0],
+                  "a push build must not depend on the probe")
+    case.assertIn("packages: read", build.split("rebuild_check:", 1)[1].split("  build:", 1)[0])
+    case.assertIn("if: needs.rebuild_check.outputs.needed == 'true'",
+                  build.split("  build:", 1)[1].split("runs-on:", 1)[0])
+    # The probe counts only real `<pkg>/<suite> <version>` rows.
+    case.assertIn("$1 ~ /\\//", script)
+    case.assertIn("apt-get update failed", script)
+
+    def probe(payload: str, *, status: str = "0") -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp) / "bin"
+            bin_dir.mkdir()
+            fake = bin_dir / "docker"
+            fake.write_text(
+                "#!/bin/bash\n"
+                f'if [ "{status}" != 0 ]; then printf "{payload}" >&2; exit {status}; fi\n'
+                f"printf '%b\\n' {json.dumps(payload)}\n",
+                encoding="utf-8",
+            )
+            fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+            return subprocess.run(
+                ["bash", str(REBUILD), "count", "image:test"],
+                capture_output=True, text=True, check=False,
+                env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+            )
+
+    banner = "Listing...\n"
+    libc6 = "libc6/oldstable 2.36-9+deb12u14 arm64 [upgradable from: 2.36-9+deb12u12]\n"
+    bash = "bash/oldstable 5.2.15-2+b13 arm64 [upgradable from: 5.2.15-2+b9]\n"
+    rows = libc6 + bash
+    clean = probe(banner)
+    case.assertEqual(clean.returncode, 0, clean.stderr)
+    case.assertIn("upgradable packages: 0", clean.stdout)
+    case.assertNotIn("libc6/oldstable", clean.stdout)
+
+    drift = probe(banner + rows)
+    case.assertEqual(drift.returncode, 0, drift.stderr)
+    case.assertIn("upgradable packages: 2", drift.stdout)
+    case.assertIn("libc6/oldstable 2.36-9+deb12u14", drift.stdout)
+
+    # Boundary: only one row, and a row-count that ignores noise lines.
+    single = probe(banner + libc6)
+    case.assertIn("upgradable packages: 1", single.stdout)
+    noisy = probe(banner + "WARNING: apt does not have a stable CLI interface.\n" + rows)
+    case.assertIn("upgradable packages: 2", noisy.stdout)
+
+    # A failed update must not read as "nothing to do".
+    failed = probe("apt-get update failed\n", status="1")
+    case.assertNotEqual(failed.returncode, 0)
+    case.assertIn("package probe failed", failed.stderr)
+
+    # Mutation control: count every line instead of only package rows, so the
+    # banner turns a clean image into a rebuild.
+    mutated = script.replace("awk 'NF >= 2 && $1 ~ /\\// {print $1, $2}'", "awk 'NF >= 1 {print $1, $2}'")
+    case.assertNotEqual(mutated, script)
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = Path(tmp) / "rebuild.sh"
+        copy.write_text(mutated, encoding="utf-8")
+        again = subprocess.run(
+            ["bash", str(copy), "count", "image:test"],
+            capture_output=True, text=True, check=False,
+            env=_with_fake_docker(banner),
+        )
+    # The banner alone becomes one bogus "package", so zero drift reads as 1.
+    case.assertIn("upgradable packages: 1", again.stdout)
+
+
+def _with_fake_docker(payload: str) -> dict[str, str]:
+    tmp = tempfile.mkdtemp()
+    bin_dir = Path(tmp) / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "docker"
+    fake.write_text(f"#!/bin/bash\nprintf '%b\\n' {json.dumps(payload)}\n", encoding="utf-8")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    return os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+
 CRONTAB = ROOT / "config/crontab"
 
 
@@ -499,7 +594,7 @@ class RecurringContractTest(unittest.TestCase):
 
     def test_required_check_is_validate_and_deploy_needs_it(self) -> None:
         build = workflow("ghcr.yaml")
-        self.assertIn("needs: validate", build)
+        self.assertIn("needs: [rebuild_check, validate]", build)
         self.assertIn("uses: ./.github/workflows/validate.yml", build)
         self.assertIn("needs: build", build)
         self.assertIn("--image \"$EXPECTED_IMAGE\"", build)
@@ -659,6 +754,34 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(unchecked, build)
         with self.assertRaises(AssertionError):
             assert_latest_follows_verification(self, unchecked)
+
+    def test_scheduled_rebuild_requires_package_drift(self) -> None:
+        """A weekly rebuild must be earned by real upgrades, not by the clock."""
+        assert_scheduled_rebuild_needs_drift(self, workflow("ghcr.yaml"), REBUILD.read_text(encoding="utf-8"))
+
+        # Mutation control: drop the zero-check, so a clean image rebuilds.
+        clean = workflow("ghcr.yaml").replace(
+            'if [ "$count" -ne 0 ]; then\n              needed=true\n            fi\n',
+            "needed=true\n",
+            1,
+        )
+        self.assertNotEqual(clean, workflow("ghcr.yaml"))
+        with self.assertRaises(AssertionError):
+            assert_scheduled_rebuild_needs_drift(self, clean, REBUILD.read_text(encoding="utf-8"))
+
+        # Second control: remove the numeric guard, so a malformed count reads
+        # as zero instead of failing the job.
+        unchecked = workflow("ghcr.yaml").replace(
+            '[[ "$count" =~ ^[0-9]+$ ]] || {\n'
+            '              echo "::error::published package count is missing or malformed" >&2\n'
+            "              exit 1\n"
+            "            }\n",
+            "",
+            1,
+        )
+        self.assertNotEqual(unchecked, workflow("ghcr.yaml"))
+        with self.assertRaises(AssertionError):
+            assert_scheduled_rebuild_needs_drift(self, unchecked, REBUILD.read_text(encoding="utf-8"))
 
     def test_deploy_retries_only_transient_errors(self) -> None:
         build = workflow("ghcr.yaml")

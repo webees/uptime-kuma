@@ -285,6 +285,15 @@ The publish workflow also carries one weekly `schedule`, so a base-image or
 OS-package fix can ship without a code change. Scheduled runs use `main` HEAD
 and traverse the same validate -> build -> deploy chain.
 
+Scheduled automation history: the weekly cron rebuilt unconditionally, so an
+image that was already current still cost a full build and a deploy, and every
+such deploy moved `latest`. Final decision: `rebuild_check` probes the published
+`latest` image through `scripts/rebuild.sh:count` and the build job continues
+only on a positive, well-formed upgrade count. A zero count skips the chain, so
+the deploy stays on the last verified digest. Probe failure, a malformed count,
+and an unresolvable `latest` fail closed instead of reading as "no changes".
+Push, tag, and manual events are real changes and bypass the probe.
+
 Publication history: the metadata step used to write `latest` before the image
 existed, so the mutable tag moved even when the digest smoke test, the deploy,
 or the readiness verification failed; a cancelled run left it on an unverified
@@ -309,11 +318,14 @@ the health-check port are one unprivileged value (8080).
 
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
-`.github/workflows/ghcr.yaml:digest`.
+`.github/workflows/ghcr.yaml:digest`, plus
+`.github/workflows/ghcr.yaml:rebuild_check` with `scripts/rebuild.sh:count`.
 
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
 `tests/test_recurring_gate.py:test_latest_is_promoted_only_after_verification`;
+`tests/test_recurring_gate.py:test_scheduled_rebuild_requires_package_drift`
+executes the probe against fake `docker` output;
 the deploy verifier carries its own control that deletes the digest comparison. The
 port invariant is controlled inside
 `tests/test_recurring_gate.py:test_listen_port_is_unprivileged_and_matches_fly`,
@@ -354,6 +366,10 @@ and `1` for day-of-week; turning it into a monthly rebuild fails.
 `latest` may not appear in the build metadata, promotion must follow the
 verifier, and a re-read mismatch on either the index digest or the amd64 child
 must fail; re-adding the metadata tag or dropping the comparison each turns red.
+A scheduled run must probe the published image and skip the build on zero
+upgrades; dropping the zero test or the numeric guard each turns red. Probe
+output is counted only on `<name>/<suite> <version>` rows, so a clean image or a
+`Listing...` banner alone never fabricates drift.
 Cleanup must keep exactly one cron entry, keep the `main` push trigger, share
 the publish concurrency group with `cancel-in-progress: false`, and hold an
 `older-than` window of at least 7 days plus a `keep-n-tagged` floor. Dropping
