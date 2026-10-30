@@ -173,6 +173,13 @@ def assert_target_mode_is_actionable(
     )
     case.assertIn('" | ".join(COLUMNS)', round_open, "the template is never printed")
 
+    # The written count went stale on its own merge, so the baseline is a
+    # commit the script must resolve and count past.
+    case.assertRegex(issues, r"(?m)^Audit baseline: every commit reachable through `[0-9a-f]{7,40}`")
+    case.assertIn('"rev-parse", "--verify", f"{baseline}^{{commit}}"', round_open)
+    case.assertIn('f"{baseline}..HEAD"', round_open)
+    case.assertIn("commits past the baseline, to audit this round", round_open)
+
     # The rejection list is the thing that voids a round; a subset is not one.
     for clause in ("a matrix column or row is missing",
                    "no control turned red",

@@ -30,8 +30,13 @@ summary.
 
 ## Round entry gate
 
-Run `python3.13 scripts/round_open.py` first. It prints the matrix skeleton for
-every recorded class plus the open residuals, so neither can be forgotten.
+Run `python3.13 scripts/round_open.py` first. It resolves the audit baseline,
+prints how many commits still lie past it, the matrix skeleton for every
+recorded class and the open residuals, so none of the three can be forgotten.
+
+The baseline is a commit that must resolve, not a written count: the commit
+that records a count makes that count wrong. A missing baseline exits `1`, an
+unresolvable one exits `2`, so a typo cannot read as "nothing owed".
 
 Then, before any other work:
 
