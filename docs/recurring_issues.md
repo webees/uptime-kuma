@@ -426,6 +426,9 @@ a hand deploy is drift, a machine and its release disagreeing is unreadable, and
 two amd64 children, an absent machine and an absent completed release all fail
 closed. `tests/test_deploy_drift.py:DeployDriftMutationTest` removes the digest
 comparison, the attestation filter and the release cross-check independently.
+It has also caught a real one: a hand deploy of the previous digest failed the
+next run with `DRIFT: …615bbab9… but latest is …964758a0…`, and the redeployed
+digest turned the following run back to `in sync`.
 The workflow must trigger on the publish completing, not on the push, checkout
 the published commit, and queue rather than cancel; dropping the trigger, the
 `ref`, or the non-cancelling group each turns its own control red.

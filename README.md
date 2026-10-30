@@ -226,7 +226,11 @@ fails when a class, a field, or a mutation control disappears.
   longer goes unnoticed: `deploy-drift` compares the machine image with the
   `latest` amd64 child after every publish and daily, and fails the run on a
   difference. The gate is therefore after the fact — a hand deploy reaches
-  production first and is reported, not blocked.
+  production first and is reported, not blocked. Observed 2026-10-30: a hand
+  `fly deploy --image` of the previous digest produced release `v67` and the
+  next `deploy-drift` run failed with `DRIFT: production runs …615bbab9… but
+  latest is …964758a0…`; redeploying the promoted digest produced `v68` and
+  the following run returned `in sync`.
 - `deploy` retries only transient Fly 5xx up to three attempts with backoff.
   A longer control-plane outage still fails the job and needs
   `gh run rerun --failed` (observed twice: `status 503`). The Fly CLI is
