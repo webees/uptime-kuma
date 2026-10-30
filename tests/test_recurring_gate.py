@@ -16,13 +16,16 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs/recurring_issues.md"
+TARGET_MODE = ROOT / "docs/target_mode.md"
+ROUND_OPEN = ROOT / "scripts/round_open.py"
+README = ROOT / "README.md"
 DOCKERFILE = ROOT / "Dockerfile"
 WORKFLOWS = ROOT / ".github/workflows"
 REBUILD = ROOT / "scripts/rebuild.sh"
 
 RECURRING_GOAL_GATE_CLAUSES = (
     "Every new, resumed, review, optimization, scoring, release, and post-merge round",
-    "nine-row evidence matrix",
+    "one evidence row per class",
     "positive, boundary, negative, and",
     "Run the named mutation control",
     "repair the invariant in the same round",
@@ -108,6 +111,81 @@ def assert_recurrence_contract(case: unittest.TestCase, text: str) -> None:
             case.assertIn(field, body, f"{title} is missing {field}")
         case.assertIn(authority, body, f"{title} names the wrong authority")
         case.assertIn(mutation, body, f"{title} names the wrong mutation control")
+
+
+TARGET_MODE_SECTIONS = (
+    "Role",
+    "Hard rules",
+    "Round entry gate",
+    "Matrix",
+    "Report order",
+    "Rejection criteria",
+    "Residual list",
+)
+
+TARGET_MODE_COLUMNS = (
+    "Class",
+    "History",
+    "Authoritative guard",
+    "Positive",
+    "Boundary",
+    "Negative",
+    "Mutation control",
+    "Observed result",
+)
+
+
+def sections_of(text: str) -> dict[str, str]:
+    """Split a markdown document into `## ` sections, dropping code fences."""
+    found: dict[str, str] = {}
+    matches = list(re.finditer(r"(?m)^## (.+)$", text))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        found[match.group(1)] = text[match.end():end]
+    return found
+
+
+def assert_target_mode_is_actionable(
+    case: unittest.TestCase, mode: str, issues: str, round_open: str
+) -> None:
+    """A protocol only in a chat message has to be carried by hand every round.
+
+    The procedures are therefore pinned here: the invariants must point at the
+    protocol, the protocol must keep every section, the matrix columns must
+    match the generated skeleton, and the entry script must exist and be the
+    thing the round is told to run.
+    """
+    case.assertIn("docs/target_mode.md", issues)
+    case.assertIn("scripts/round_open.py", issues)
+
+    found = sections_of(mode)
+    for required in TARGET_MODE_SECTIONS:
+        case.assertIn(required, found, f"docs/target_mode.md is missing {required}")
+
+    # The shipped skeleton and the written columns are one contract, in order.
+    header = "| " + " | ".join(TARGET_MODE_COLUMNS) + " |"
+    case.assertIn(header, found["Matrix"])
+    listed = re.search(r"(?s)COLUMNS = \((.*?)\n\)", round_open)
+    case.assertIsNotNone(listed, "scripts/round_open.py lost its column tuple")
+    case.assertEqual(
+        tuple(re.findall(r'"([^"]+)"', listed.group(1))), TARGET_MODE_COLUMNS
+    )
+    case.assertIn('" | ".join(COLUMNS)', round_open, "the template is never printed")
+
+    # The rejection list is the thing that voids a round; a subset is not one.
+    for clause in ("a matrix column or row is missing",
+                   "no control turned red",
+                   "presented as this round's evidence",
+                   "without the post-deploy reads",
+                   "reported as a successful deployment",
+                   "written through the shell",
+                   "residual list grew"):
+        case.assertIn(clause, found["Rejection criteria"])
+
+
+def assert_residuals_live_in_one_place(case: unittest.TestCase, readme: str) -> None:
+    """A residual written down nowhere is indistinguishable from a closed one."""
+    case.assertIn("\n## ⚠️ Residual risk\n", readme)
 
 
 def scan_for_sensitive_data(text: str) -> list[str]:
@@ -239,6 +317,7 @@ PUSH_IGNORABLE = {
     "docs/**",
     "tests/**",
     "scripts/rebuild.sh",
+    "scripts/round_open.py",
 }
 
 
@@ -640,6 +719,42 @@ class RecurringContractTest(unittest.TestCase):
 
     def test_recurring_classes_are_complete(self) -> None:
         assert_recurrence_contract(self, DOC.read_text(encoding="utf-8"))
+
+    def test_target_mode_is_a_repository_artifact(self) -> None:
+        """The round protocol must outlive the chat message that introduced it."""
+        mode = TARGET_MODE.read_text(encoding="utf-8")
+        issues = DOC.read_text(encoding="utf-8")
+        round_open = ROUND_OPEN.read_text(encoding="utf-8")
+        assert_target_mode_is_actionable(self, mode, issues, round_open)
+        assert_residuals_live_in_one_place(self, README.read_text(encoding="utf-8"))
+
+        # Mutation control: delete the rejection rule that voids a round, and
+        # the protocol becomes advice again.
+        weakened = mode.replace("- a matrix column or row is missing;\n", "", 1)
+        self.assertNotEqual(weakened, mode)
+        with self.assertRaises(AssertionError):
+            assert_target_mode_is_actionable(self, weakened, issues, round_open)
+
+        # Second control: the invariants stop pointing at the protocol, so a
+        # round can still open from memory.
+        detached = issues.replace("`docs/target_mode.md`", "the protocol", 1)
+        self.assertNotEqual(detached, issues)
+        with self.assertRaises(AssertionError):
+            assert_target_mode_is_actionable(self, mode, detached, round_open)
+
+        # Third control: drop a matrix column from the generator only. The
+        # written table and the printed skeleton silently diverge.
+        drifted = round_open.replace('"Observed result",\n', "", 1)
+        self.assertNotEqual(drifted, round_open)
+        with self.assertRaises(AssertionError):
+            assert_target_mode_is_actionable(self, mode, issues, drifted)
+
+        # Fourth control: the residual list moves, so new risks land elsewhere.
+        homeless = README.read_text(encoding="utf-8").replace(
+            "\n## ⚠️ Residual risk\n", "\n## Known issues\n", 1
+        )
+        with self.assertRaises(AssertionError):
+            assert_residuals_live_in_one_place(self, homeless)
 
     def test_contract_mutation_removes_authoritative_field(self) -> None:
         text = DOC.read_text(encoding="utf-8")
