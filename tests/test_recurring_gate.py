@@ -236,7 +236,7 @@ def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
     """A body whose matrix is fully filled, for parser tests."""
     rows = "\n".join(
         f"| {title} | unchanged, `git log -Gx` → `abc1234` | "
-        f"`{authority_path(document, title)}:symbol` | ran | "
+        f"`{authority_guard(document, title)}` | ran | "
         f"ran | ran | `tests/a.py:case` | {result} |"
         for title in target_classes(document)
     )
@@ -487,7 +487,7 @@ def replace_cells(body: str, column: str, value) -> str:
 
 
 def authority_path(document: str, title: str) -> str:
-    """The first path named in a class's `Authority:` sentence.
+    """The first span named in a class's `Authority:` sentence.
 
     The authority wraps and several classes continue with prose, so the parse
     mirrors `scripts/pr_matrix.py:authorities` rather than reading one line.
@@ -495,7 +495,13 @@ def authority_path(document: str, title: str) -> str:
     block = document.split(f"\n## {title}\n", 1)[1].split("\n## ", 1)[0]
     authority = block.split("\nAuthority: ", 1)[1].split("\nMutation control:", 1)[0]
     first = re.split(r"\.(?:\s|$)", authority, maxsplit=1)[0]
-    return re.search(r"`([^`:]+)", first).group(1)
+    return re.search(r"`([^`]+)", first).group(1)
+
+
+def authority_guard(document: str, title: str) -> str:
+    """A guard that names the class's first authority and its symbol."""
+    span = authority_path(document, title)
+    return span if ":" in span else f"{span}:x"
 
 
 def run_matrix(
@@ -1203,7 +1209,7 @@ class RecurringContractTest(unittest.TestCase):
 
         # A class whose guard this PR edits cannot be excused with `未验证`:
         # the reader has the diff in hand and nobody else will look again.
-        touched = authority_path(document, target_classes(document)[0])
+        touched = authority_path(document, target_classes(document)[0]).split(":")[0]
         self.assertIn(
             "touches its authority",
             run_matrix(unverified_many, document, touched=[touched]).stderr,
@@ -1227,6 +1233,85 @@ class RecurringContractTest(unittest.TestCase):
         # that names a plausible but different file still reads as audited.
         wrong_guard = broken(replace_row(good, "Authoritative guard", "`nowhere.py:thing`"))
         self.assertIn("not the recorded authority", wrong_guard)
+        # A recorded path is not enough by itself: the symbol has to exist in
+        # that file, or the row points at a name the guard never defined.
+        missing_symbol = broken(
+            replace_cells(
+                good,
+                "Authoritative guard",
+                lambda title: "`{}:no_such_directive`".format(
+                    authority_guard(document, title).split(":")[0]
+                ),
+            )
+        )
+        self.assertIn("does not occur in", missing_symbol)
+        # Boundary: a symbol that only occurs inside a longer one is still
+        # recorded and still finds a match, so the match has to be a whole
+        # token: `@heal` is a prefix of `@health`.
+        prefix_doc = document.replace("config/Caddyfile:@health", "config/Caddyfile:@heal")
+        self.assertNotEqual(prefix_doc, document)
+        prefix_body = replace_cells(
+            good,
+            "Authoritative guard",
+            lambda title: "`config/Caddyfile:@heal`"
+            if title == "Host Policy And Health Escape"
+            else f"`{authority_guard(document, title)}`",
+        )
+        prefix = run_matrix(prefix_body, prefix_doc)
+        self.assertEqual(prefix.returncode, 1)
+        self.assertIn("does not occur in", prefix.stderr)
+        # Boundary: a recorded path that no longer exists passes the equality
+        # test, so the file itself has to be read.
+        gone_doc = document.replace("`config/Caddyfile:@health`", "`config/Gone:@health`", 1)
+        self.assertNotEqual(gone_doc, document)
+        gone_body = replace_cells(
+            good,
+            "Authoritative guard",
+            lambda title: "`config/Gone:@health`"
+            if title == "Host Policy And Health Escape"
+            else f"`{authority_guard(document, title)}`",
+        )
+        gone = run_matrix(gone_body, gone_doc)
+        self.assertEqual(gone.returncode, 1)
+        self.assertIn("names a missing file config/Gone", gone.stderr)
+        # Boundary: `config/Caddyfile` is the authority of two classes, so the
+        # path alone cannot decide. A symbol belonging to the neighbour is a
+        # real directive in a real file and still has to be rejected.
+        borrowed = broken(
+            replace_row(
+                good,
+                "Authoritative guard",
+                f"`config/Caddyfile:{authority_guard(document, target_classes(document)[1]).split(':')[-1]}`",
+            )
+        )
+        self.assertIn("not the recorded authority", borrowed)
+        # Boundary: the file without the symbol is also not the authority when
+        # the class records a symbol; `config/Caddyfile` alone names two gates.
+        file_only = broken(
+            replace_cells(
+                good,
+                "Authoritative guard",
+                lambda title: f"`{authority_guard(document, title).split(':')[0]}`"
+                if title == "Host Policy And Health Escape"
+                else f"`{authority_guard(document, title)}`",
+            )
+        )
+        self.assertIn("not the recorded authority", file_only)
+        # The digest class records bare paths, so a guard without a symbol
+        # stays legal there.
+        self.assertEqual(
+            run_matrix(
+                replace_cells(
+                    good,
+                    "Authoritative guard",
+                    lambda title: "`Dockerfile`"
+                    if title == "Supply Chain And Public Surface"
+                    else f"`{authority_guard(document, title)}`",
+                ),
+                document,
+            ).returncode,
+            0,
+        )
         # Positive: the recorded authority passes, including a second one when
         # the document names more than one for a class.
         self.assertEqual(
@@ -1234,7 +1319,7 @@ class RecurringContractTest(unittest.TestCase):
                 replace_cells(
                     good,
                     "Authoritative guard",
-                    lambda title: f"`{authority_path(document, title)}:x`",
+                    lambda title: f"`{authority_guard(document, title)}`",
                 ),
                 document,
             ).returncode,
@@ -1277,14 +1362,46 @@ class RecurringContractTest(unittest.TestCase):
 
         # Mutation control for the guard column: without the comparison any
         # credible-looking path passes and the row reads as audited.
-        wrong_guard_body = replace_row(good, "Authoritative guard", "`nowhere.py:thing`")
+        wrong_guard_body = replace_row(good, "Authoritative guard", "`README.md:Residual`")
         without_guard = run_mutated_matrix(
             wrong_guard_body,
             document,
-            [('            if not (named & recorded):',
-              '            if False and not (named & recorded):')],
+            [("        if path not in owned:", "        if False and path not in owned:")],
         )
         self.assertEqual(without_guard.returncode, 0, without_guard.stderr)
+
+        # The symbol is a second, independent check: dropping only it brings
+        # back the recorded-but-renamed guard.
+        # One authority renamed in the document and in the row that names it,
+        # while the source keeps the old name: a rename that left the code
+        # behind. The path is recorded, so only the symbol check notices.
+        renamed_doc = document.replace("assert_recurrence_contract", "gone_symbol")
+        stale_symbol = replace_cells(
+            good,
+            "Authoritative guard",
+            lambda title: "`tests/test_recurring_gate.py:gone_symbol`"
+            if title == "Simplification Rule"
+            else f"`{authority_guard(document, title)}`",
+        )
+        without_symbol = run_mutated_matrix(
+            stale_symbol,
+            renamed_doc,
+            [("        if symbol and file.is_file() and not re.search(",
+              "        if False and symbol and file.is_file() and not re.search(")],
+        )
+        self.assertEqual(without_symbol.returncode, 0, without_symbol.stderr)
+
+        # And the file check: a recorded path renamed out from under the
+        # document still matches by name, so only reading it notices. Without
+        # the read the whole run aborts as unreadable (`rc=2`) instead of
+        # naming the row.
+        without_file = run_mutated_matrix(
+            gone_body,
+            gone_doc,
+            [("        if symbol and not file.is_file():",
+              "        if False and symbol and not file.is_file():")],
+        )
+        self.assertEqual(without_file.returncode, 0, without_file.stderr)
 
         # Mutation control 4: a ninth-but-wrong column shifts every cell.
         widened = good.replace(

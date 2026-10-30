@@ -104,6 +104,52 @@ def paths(spans: list[str]) -> set[str]:
     return {span.split(":")[0] for span in spans}
 
 
+def guard_problems(title: str, guard: str, recorded: list[str]) -> list[str]:
+    """One problem per guard that is not the authority this class records.
+
+    The path alone is not the invariant: `config/Caddyfile` is the authority of
+    two classes and `scripts/restic.sh` of four, so a correct path with a
+    neighbour's symbol reads as audited while pointing at nothing. A span must
+    therefore be recorded as written, and its symbol must still exist in that
+    file — a rename that leaves the document behind is the same defect. A class
+    that records only the bare file (`Dockerfile`) accepts a symbol, which must
+    still occur in it; a class that records symbols requires the written one.
+    """
+    named = SPAN.findall(guard) or [guard]
+    colon = {other.split(":")[0] for other in recorded if ":" in other}
+    owned = paths(recorded)
+    problems: list[str] = []
+    for span in named:
+        path, _, symbol = span.partition(":")
+        if path not in owned:
+            problems.append(
+                f"{title!r} guard {guard!r} is not the recorded "
+                f"authority {sorted(set(recorded))}"
+            )
+            continue
+        # A recorded bare path accepts any symbol on it. Where symbols are
+        # recorded only the written one passes — a missing symbol names both
+        # gates of a shared file, a neighbour's directive names the wrong one.
+        if path in colon and span not in recorded:
+            problems.append(
+                f"{title!r} guard {guard!r} is not the recorded authority "
+                f"{sorted(set(recorded))}"
+            )
+            continue
+        file = Path(path)
+        if symbol and not file.is_file():
+            problems.append(f"{title!r} guard {guard!r} names a missing file {path}")
+            continue
+        if symbol and file.is_file() and not re.search(
+            rf"(?<![\w-]){re.escape(symbol)}(?![\w-])",
+            file.read_text(encoding="utf-8", errors="replace"),
+        ):
+            problems.append(
+                f"{title!r} guard {guard!r} symbol {symbol!r} does not occur in {path}"
+            )
+    return problems
+
+
 def check(
     body: str,
     document: str,
@@ -154,13 +200,8 @@ def check(
             )
         guard = found[COLUMNS.index("Authoritative guard")]
         if guard:
-            recorded = paths(owned.get(title, []))
-            named = paths(SPAN.findall(guard)) or paths([guard])
-            if not (named & recorded):
-                problems.append(
-                    f"line {number}: {title!r} guard {guard!r} is not the recorded "
-                    f"authority {sorted(recorded)}"
-                )
+            for problem in guard_problems(title, guard, owned.get(title, [])):
+                problems.append(f"line {number}: {problem}")
         if found[-1] and UNVERIFIED.match(found[-1]) and len(found[-1].split()) < 3:
             problems.append(f"line {number}: {title!r} says 未验证 without a reason")
         if touched and found[-1] and UNVERIFIED.match(found[-1]):
