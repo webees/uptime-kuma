@@ -11,4 +11,5 @@ fly.toml
 README.md
 docs
 scripts/rebuild.sh
+scripts/round_open.py
 tests

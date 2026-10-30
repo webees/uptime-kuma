@@ -20,16 +20,18 @@ extend that audit to every commit reachable at its start.
 ## Target-Mode Prompt
 
 Every new, resumed, review, optimization, scoring, release, and post-merge round
-starts with this gate. Build a nine-row evidence matrix containing the class,
-history classification, authoritative guard, positive/boundary/negative
-evidence, named mutation control, and observed result. Run the named mutation
-control and prove that removing the guard changes the outcome. If a row is
-failing, unverified, or shows a guard weakened by simplification, repair the
-invariant in the same round before other work. Do not optimize, score, merge,
-deploy, or claim completion while any row lacks evidence or has an unclassified
-residual. Record the matrix in the PR or final report without creating
-per-round files. The matrix is a review artifact, not a score: a passing row
-requires observed command or test output.
+starts with this gate. The procedure itself lives in
+`docs/target_mode.md`, and `python3.13 scripts/round_open.py` prints the skeleton
+so no round opens from memory. Build one evidence row per class below containing
+the history classification, authoritative guard, positive, boundary and
+negative evidence, a named mutation control, and the observed result. Run the
+named mutation control and prove that removing the guard changes the outcome.
+If a row is failing, unverified, or shows a guard weakened by simplification,
+repair the invariant in the same round before other work. Do not optimize,
+score, merge, deploy, or claim completion while any row lacks evidence or has an
+unclassified residual. Record the matrix in the PR or final report without
+creating per-round files. The matrix is a review artifact, not a score: a
+passing row requires observed command or test output.
 
 ## Every-Round Goal Gate
 
