@@ -37,6 +37,7 @@ on:
       - tests/**
       - scripts/rebuild.sh
       - scripts/round_open.py
+      - scripts/deploy_drift.py
 
 env:
   REGISTRY: ghcr.io

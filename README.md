@@ -112,6 +112,11 @@ immediately; choose `probe` to exercise the scheduled decision by hand.
 `Validate` is a required status check on `main`; a commit that fails it cannot
 merge (see [Residual risk](#-residual-risk)).
 
+`deploy-drift` runs on every `main` push and daily at 05:41: it reads the
+machine image and the `latest` amd64 child and fails on a difference. It is the
+only detector for the case above — a hand deploy, or a promotion that never
+happened — because CI itself is not involved in either.
+
 ### CI Deploy Credential
 
 The publish workflow deploys the exact digest with a token scoped to one app.
@@ -215,8 +220,12 @@ fails when a class, a field, or a mutation control disappears.
 - The `validate` context is enforced on `main` for admins too and has been
   observed gating real PRs, so a rename of the check needs the branch rule
   renamed in the same commit.
-- The image is only published and deployed from GitHub Actions; a manual
-  `fly deploy` builds this Dockerfile and bypasses the digest gate.
+- The image is only published and deployed from GitHub Actions, and a manual
+  `fly deploy` still builds this Dockerfile and bypasses the digest gate. It no
+  longer goes unnoticed: `deploy-drift` compares the machine image with the
+  `latest` amd64 child after every `main` push and daily, and fails the run on a
+  difference. The gate is therefore after the fact — a hand deploy reaches
+  production first and is reported, not blocked.
 - `deploy` retries only transient Fly 5xx up to three attempts with backoff.
   A longer control-plane outage still fails the job and needs
   `gh run rerun --failed` (observed twice: `status 503`). The Fly CLI is
