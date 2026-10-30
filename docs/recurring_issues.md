@@ -338,11 +338,12 @@ matched it: a hand `fly deploy` builds the Dockerfile and reaches the machine
 with no digest gate, and a promotion that silently never ran looks identical
 from the outside. Final decision: `.github/workflows/deploy-drift.yml` reads the
 newest completed release, every machine image and the `latest` amd64 child after
-every `main` push and daily, and fails on any difference. Every read is bounded,
+every publish and daily, and fails on any difference. Every read is bounded,
 and an unreadable document exits `2` rather than reading as "in sync"; the
 detector is after the fact by design, because a hand deploy cannot be blocked.
-It shares the publish concurrency group and never cancels, since a release and
-a machine move separately and reading between them looks like a broken app.
+It runs on `workflow_run` rather than the push, because a release and a machine
+move separately and reading between them looks like a broken app; the first
+`main` push proved it by cancelling the publish run before any job started.
 
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
@@ -421,6 +422,9 @@ a hand deploy is drift, a machine and its release disagreeing is unreadable, and
 two amd64 children, an absent machine and an absent completed release all fail
 closed. `tests/test_deploy_drift.py:DeployDriftMutationTest` removes the digest
 comparison, the attestation filter and the release cross-check independently.
+The workflow must trigger on the publish completing, not on the push, checkout
+the published commit, and queue rather than cancel; dropping the trigger, the
+`ref`, or the non-cancelling group each turns its own control red.
 `validate.yml` is both a `workflow_call` target and a standalone workflow, so
 its concurrency group must include the workflow name: keyed only on the ref,
 the nested copy and its standalone twin share a group under
