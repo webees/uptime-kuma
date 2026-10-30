@@ -1,0 +1,80 @@
+name: 🧭 Deploy Drift
+
+on:
+  # Daily, plus every `main` push so a hand deploy is caught within the hour
+  # instead of at the next cron. The push trigger is also what keeps GitHub
+  # from disabling the workflow after a long quiet period.
+  schedule:
+    - cron: '41 5 * * *'
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+concurrency:
+  group: deploy-drift
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # Same pinned GitHub release as the deploy job: the setup action resolves
+      # `latest` through Fly itself, which is the service under test here.
+      - name: 🛫 Install pinned flyctl
+        env:
+          FLYCTL_VERSION: 0.5.1
+          FLYCTL_SHA256: 47803bc5dc3eb7c7a45626ff76f0082e8c5b5fb8b805efbe00469d04757e1b1b
+          FLYCTL_ASSET: flyctl_0.5.1_Linux_x86_64.tar.gz
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          url="https://github.com/superfly/flyctl/releases/download/v${FLYCTL_VERSION}/${FLYCTL_ASSET}"
+          curl --fail --silent --show-error --location --retry 3 --max-time 120 \
+            --output "$tmp/$FLYCTL_ASSET" "$url"
+          printf '%s  %s\n' "$FLYCTL_SHA256" "$tmp/$FLYCTL_ASSET" | sha256sum -c -
+          tar -xzf "$tmp/$FLYCTL_ASSET" -C "$tmp" flyctl
+          install -m 0755 "$tmp/flyctl" /usr/local/bin/flyctl
+          flyctl version
+
+      # `latest` is ours and public; a token is only needed for the app reads.
+      - name: 🔐 Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🧭 Compare production with the promoted image
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${FLY_API_TOKEN:?repository secret FLY_API_TOKEN is required}"
+          app="$(sed -n 's/^app = "\(.*\)"$/\1/p' fly.toml)"
+          test -n "$app"
+          out="$RUNNER_TEMP/drift"
+          mkdir -p "$out"
+          # Every read is bounded and every read failing aborts: "cannot tell"
+          # must never be reported as "in sync".
+          timeout 60 flyctl releases -a "$app" --json > "$out/releases.json"
+          timeout 60 flyctl status -a "$app" --json > "$out/status.json"
+          timeout 120 docker buildx imagetools inspect \
+            "${REGISTRY}/${IMAGE_NAME}:latest" --raw > "$out/latest.json"
+          python3 scripts/deploy_drift.py \
+            "$out/releases.json" "$out/status.json" "$out/latest.json"
