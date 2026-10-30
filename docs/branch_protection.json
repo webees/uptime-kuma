@@ -1,0 +1,12 @@
+{
+  "_comment": "Recorded copy of the live main branch rule, re-read with scripts/branch_rule.py. Observed 2026-10-30. Changing an entry here without changing the live rule is rule drift, not a commit.",
+  "required_status_checks": {
+    "contexts": [
+      "validate"
+    ],
+    "strict": false
+  },
+  "enforce_admins": {
+    "enabled": true
+  }
+}

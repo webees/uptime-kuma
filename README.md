@@ -219,8 +219,13 @@ fails when a class, a field, or a mutation control disappears.
 ## ⚠️ Residual risk
 
 - The `validate` context is enforced on `main` for admins too and has been
-  observed gating real PRs, so a rename of the check needs the branch rule
-  renamed in the same commit.
+  observed gating real PRs. That rule lives outside the repository, and
+  `GITHUB_TOKEN` cannot read it, so it is recorded in
+  `docs/branch_protection.json` and compared by `scripts/branch_rule.py`.
+  `gh api repos/webees/uptime-kuma/branches/main/protection > live.json` then
+  `python3.13 scripts/branch_rule.py live.json` reports `rule matches` or
+  `RULE DRIFT`. A check rename still has to land in both the live rule and the
+  recorded copy, in that order, or every merge blocks.
 - The image is only published and deployed from GitHub Actions, and a manual
   `fly deploy` still builds this Dockerfile and bypasses the digest gate. It no
   longer goes unnoticed: `deploy-drift` compares the machine image with the

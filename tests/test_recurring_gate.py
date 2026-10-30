@@ -7,6 +7,7 @@ import re
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -23,6 +24,7 @@ README = ROOT / "README.md"
 DOCKERFILE = ROOT / "Dockerfile"
 WORKFLOWS = ROOT / ".github/workflows"
 REBUILD = ROOT / "scripts/rebuild.sh"
+BRANCH_RULE = ROOT / "docs/branch_protection.json"
 
 RECURRING_GOAL_GATE_CLAUSES = (
     "Every new, resumed, review, optimization, scoring, release, and post-merge round",
@@ -292,6 +294,39 @@ def assert_drift_workflow_is_registered(case: unittest.TestCase, workflows: dict
     case.assertIn("deploy-drift.yml", workflows)
 
 
+def assert_required_check_is_a_job(case: unittest.TestCase, recorded: str, validate: str) -> None:
+    """A required context that names no job blocks `main` forever.
+
+    The rule itself lives outside the repository, so renaming the job (or the
+    workflow, which changes the `Validate / validate` context) leaves a merge
+    requirement nothing can ever satisfy, and the failure only shows up when
+    the next PR cannot merge. The recorded copy is the checked half: every
+    context it lists must be a job in the workflow that produces it.
+    """
+    document = json.loads(recorded)
+    contexts = document["required_status_checks"]["contexts"]
+    case.assertTrue(contexts, "no required context is recorded")
+    jobs = re.findall(r"(?m)^  ([A-Za-z_][\w-]*):$", validate.split("\njobs:\n", 1)[1])
+    title = re.search(r"(?m)^name: (.+)$", validate)
+    case.assertIsNotNone(title, "validate.yml has no name")
+    for context in contexts:
+        # GitHub reports `Workflow / job`; a bare name is the legacy form that
+        # still resolves, so both halves are checked when the pair is present.
+        workflow_name, _, job = context.rpartition(" / ")
+        case.assertIn(job, jobs, f"required context {context!r} names no job in validate.yml")
+        if workflow_name:
+            case.assertEqual(
+                workflow_name,
+                title.group(1).strip(),
+                f"required context {context!r} names the wrong workflow",
+            )
+    case.assertIs(
+        document["enforce_admins"]["enabled"],
+        True,
+        "admins must be bound too, or the rule is advisory",
+    )
+
+
 def scan_for_sensitive_data(text: str) -> list[str]:
     return [label for label, pattern in SENSITIVE_PATTERNS if pattern.search(text)]
 
@@ -308,6 +343,20 @@ def assert_base_image_is_pinned(case: unittest.TestCase, text: str) -> None:
 
 def workflow(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
+
+
+def compare_rule(case: unittest.TestCase, live: object) -> subprocess.CompletedProcess[str]:
+    """Run `scripts/branch_rule.py` against a live payload written to disk."""
+    with tempfile.TemporaryDirectory(prefix="branch-rule-") as tmp:
+        path = Path(tmp) / "live.json"
+        path.write_text(json.dumps(live), encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(ROOT / "scripts/branch_rule.py"), str(path)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
 
 def assert_app_name_is_recorded(
@@ -423,6 +472,7 @@ PUSH_IGNORABLE = {
     "scripts/rebuild.sh",
     "scripts/round_open.py",
     "scripts/deploy_drift.py",
+    "scripts/branch_rule.py",
 }
 
 
@@ -910,6 +960,72 @@ class RecurringContractTest(unittest.TestCase):
         self.assertIn("workflow_call: {}", validate)
         self.assertIn("python3 tests/runtime_smoke.py", validate)
         self.assertIn("caddy validate --config /Caddyfile", validate)
+
+    def test_required_context_names_a_real_job(self) -> None:
+        recorded = BRANCH_RULE.read_text(encoding="utf-8")
+        validate = workflow("validate.yml")
+        assert_required_check_is_a_job(self, recorded, validate)
+
+        # Mutation control 1: renaming the job leaves a requirement that can
+        # never be satisfied, which blocks every merge instead of failing here.
+        renamed = validate.replace("\n  validate:\n", "\n  checks:\n", 1)
+        self.assertNotEqual(renamed, validate)
+        with self.assertRaises(AssertionError) as caught:
+            assert_required_check_is_a_job(self, recorded, renamed)
+        self.assertIn("names no job", str(caught.exception))
+
+        # Mutation control 2: the workflow name is half of the reported
+        # context, so renaming the workflow breaks the recorded pair too.
+        retitled = recorded.replace('"validate"', '"Checks / validate"', 1)
+        self.assertNotEqual(retitled, recorded)
+        with self.assertRaises(AssertionError) as caught:
+            assert_required_check_is_a_job(self, retitled, validate)
+        self.assertIn("wrong workflow", str(caught.exception))
+
+        # Mutation control 3: an advisory rule (admins unbound) lets a merge
+        # through that never ran the check.
+        advisory = json.loads(recorded)
+        advisory["enforce_admins"]["enabled"] = False
+        with self.assertRaises(AssertionError):
+            assert_required_check_is_a_job(self, json.dumps(advisory), validate)
+
+    def test_recorded_rule_matches_the_live_rule(self) -> None:
+        """The recorded copy is only useful if a reader compares it."""
+        script = (ROOT / "scripts/branch_rule.py").read_text(encoding="utf-8")
+        self.assertIn("docs/branch_protection.json", script)
+        self.assertIn("RULE DRIFT: ", script)
+
+        live = {
+            "required_status_checks": {"contexts": ["validate"], "strict": False},
+            "enforce_admins": {"enabled": True},
+        }
+        same = compare_rule(self, live)
+        self.assertEqual(same.returncode, 0, same.stderr)
+        self.assertIn("rule matches: contexts=validate", same.stdout)
+
+        # Mutation control 1: one renamed context is rule drift, not a wording
+        # preference, and the message must name both sides.
+        drifted = json.loads(json.dumps(live))
+        drifted["required_status_checks"]["contexts"] = ["Validate / checks"]
+        changed = compare_rule(self, drifted)
+        self.assertEqual(changed.returncode, 1, changed.stderr)
+        self.assertIn("RULE DRIFT", changed.stderr)
+        self.assertIn("Validate / checks", changed.stderr)
+        self.assertIn("validate", changed.stderr)
+
+        # Mutation control 2: an empty context list is the dangerous shape —
+        # the rule looks enabled and gates nothing.
+        open_rule = json.loads(json.dumps(live))
+        open_rule["required_status_checks"]["contexts"] = []
+        self.assertEqual(compare_rule(self, open_rule).returncode, 1)
+
+        # Mutation control 3: unbound admins turn the rule into advice.
+        advisory = json.loads(json.dumps(live))
+        advisory["enforce_admins"]["enabled"] = False
+        self.assertEqual(compare_rule(self, advisory).returncode, 1)
+
+        # A document without the fields is unreadable, never "unchanged".
+        self.assertEqual(compare_rule(self, {"enforce_admins": {"enabled": True}}).returncode, 2)
 
     def test_deploy_verification_rejects_every_mismatch(self) -> None:
         """The recorded evidence must be about *this* digest, on every machine."""
