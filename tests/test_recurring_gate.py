@@ -246,6 +246,31 @@ def assert_matrix_gate_is_wired(case: unittest.TestCase, validate: str) -> None:
     case.assertIn(".body", body)
 
 
+def assert_caller_grants_the_called_permissions(
+    case: unittest.TestCase, build: str, validate: str
+) -> None:
+    """A reusable workflow cannot grant itself more than its caller holds.
+
+    Asking for a scope inside `validate.yml` without granting it on the calling
+    job kills the whole publish before a single job starts: `startup_failure`,
+    zero jobs, and the standalone PR run stays green because it is its own
+    caller (observed: run `41080321915`). So every scope the called workflow
+    declares must also be declared by the calling job.
+    """
+    # Comments interleave the block, so only real `scope: value` lines count.
+    case.assertIn("pull-requests:", validate, "validate.yml declares no permissions")
+    wanted = set(re.findall(r"(?m)^  ([a-z-]+): \S+$", permissions_block(validate)))
+
+    caller = build.split("\n  validate:\n", 1)
+    case.assertEqual(len(caller), 2, "the publish workflow has no validate job")
+    job = caller[1].split("\n  build:", 1)[0]
+    block = permissions_block(job)
+    case.assertTrue(block, f"the calling job grants nothing, so {sorted(wanted)} cannot be held")
+    have = set(re.findall(r"(?m)^      ([a-z-]+): \S+$", block))
+    for scope in sorted(wanted):
+        case.assertIn(scope, have, f"the caller does not grant {scope} to validate.yml")
+
+
 def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -> None:
     """A hand deploy reaches production first, so the detector must exist.
 
@@ -386,6 +411,21 @@ def assert_base_image_is_pinned(case: unittest.TestCase, text: str) -> None:
 
 def workflow(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
+
+
+def permissions_block(text: str) -> str:
+    """The lines under a `permissions:` key, comments excluded, at any indent."""
+    match = re.search(r"(?m)^( *)permissions:\n", text)
+    if match is None:
+        return ""
+    indent = match.group(1) + "  "
+    lines = []
+    for line in text[match.end():].splitlines():
+        if line.startswith(indent) and line.strip() and not line.strip().startswith("#"):
+            lines.append(line)
+        elif line.strip() and not line.startswith(indent):
+            break
+    return "\n".join(lines)
 
 
 def run_matrix(body: str, document: str) -> subprocess.CompletedProcess[str]:
@@ -1051,6 +1091,28 @@ class RecurringContractTest(unittest.TestCase):
         # The protocol must name the gate, or the rule and its enforcement
         # drift apart and neither is believed.
         self.assertIn("scripts/pr_matrix.py", TARGET_MODE.read_text(encoding="utf-8"))
+
+    def test_caller_grants_every_permission_validate_asks_for(self) -> None:
+        build = workflow("ghcr.yaml")
+        validate = workflow("validate.yml")
+        assert_caller_grants_the_called_permissions(self, build, validate)
+
+        # Mutation control: the exact shipped shape — the scope added to the
+        # called workflow only. This is what produced the startup failure.
+        caller_lost = build.replace(
+            "    permissions:\n      contents: read\n      pull-requests: read\n", "", 1
+        )
+        self.assertNotEqual(caller_lost, build)
+        with self.assertRaises(AssertionError) as caught:
+            assert_caller_grants_the_called_permissions(self, caller_lost, validate)
+        self.assertIn("pull-requests", str(caught.exception))
+
+        # Second control: the block exists but the one scope it needs is gone,
+        # so presence alone is not enough.
+        narrowed = build.replace("      pull-requests: read\n", "", 1)
+        self.assertNotEqual(narrowed, build)
+        with self.assertRaises(AssertionError):
+            assert_caller_grants_the_called_permissions(self, narrowed, validate)
 
         # Mutation control: a step that checks a checked-out file instead of the
         # API body lets the PR carry a table nobody read.
