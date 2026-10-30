@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs/recurring_issues.md"
 TARGET_MODE = ROOT / "docs/target_mode.md"
 ROUND_OPEN = ROOT / "scripts/round_open.py"
+PR_TEMPLATE = ROOT / ".github/PULL_REQUEST_TEMPLATE.md"
 README = ROOT / "README.md"
 DOCKERFILE = ROOT / "Dockerfile"
 WORKFLOWS = ROOT / ".github/workflows"
@@ -186,6 +187,19 @@ def assert_target_mode_is_actionable(
 def assert_residuals_live_in_one_place(case: unittest.TestCase, readme: str) -> None:
     """A residual written down nowhere is indistinguishable from a closed one."""
     case.assertIn("\n## ⚠️ Residual risk\n", readme)
+
+
+def assert_pr_template_carries_the_matrix(case: unittest.TestCase, template: str) -> None:
+    """The matrix is required in every PR, so it must arrive prefilled.
+
+    The protocol says the matrix goes into the PR body. Without a template that
+    is a habit; with one, the table and the four report headings are already in
+    the editor and only the evidence is missing.
+    """
+    header = "| " + " | ".join(TARGET_MODE_COLUMNS) + " |"
+    case.assertIn(header, template, "the PR template lost the matrix header")
+    for heading in ("## Conclusion", "## Matrix", "## Changes", "## Verification", "## Residual"):
+        case.assertIn(f"{heading}\n", template)
 
 
 def scan_for_sensitive_data(text: str) -> list[str]:
@@ -755,6 +769,24 @@ class RecurringContractTest(unittest.TestCase):
         )
         with self.assertRaises(AssertionError):
             assert_residuals_live_in_one_place(self, homeless)
+
+    def test_pr_template_carries_the_matrix(self) -> None:
+        """A required section that is not prefilled is the one that gets skipped."""
+        template = PR_TEMPLATE.read_text(encoding="utf-8")
+        assert_pr_template_carries_the_matrix(self, template)
+
+        # Mutation control: the section stays named but the table disappears,
+        # which is exactly the "matrix" PRs that only list changes.
+        headerless = "\n".join(
+            line for line in template.splitlines() if not line.startswith("|")
+        )
+        with self.assertRaises(AssertionError):
+            assert_pr_template_carries_the_matrix(self, headerless)
+
+        # Second control: a renamed heading no longer matches the protocol.
+        renamed = template.replace("## Residual\n", "## Notes\n", 1)
+        with self.assertRaises(AssertionError):
+            assert_pr_template_carries_the_matrix(self, renamed)
 
     def test_contract_mutation_removes_authoritative_field(self) -> None:
         text = DOC.read_text(encoding="utf-8")
