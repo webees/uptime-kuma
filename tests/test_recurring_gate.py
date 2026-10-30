@@ -196,6 +196,12 @@ def assert_target_mode_is_actionable(
     case.assertIn("RUNNABLE.search", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("`n/a` is not a classification and `validate` rejects it", found["Matrix"])
     case.assertIn("names the runnable test or command in backticks", found["Matrix"])
+    # The guard must be the authority recorded here, or a row can name any
+    # plausible file and still look audited.
+    case.assertIn(
+        "guard {guard!r} is not the recorded",
+        (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"),
+    )
 
     # The rejection list is the thing that voids a round; a subset is not one.
     for clause in ("a matrix column or row is missing",
@@ -229,7 +235,8 @@ def assert_pr_template_carries_the_matrix(case: unittest.TestCase, template: str
 def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
     """A body whose matrix is fully filled, for parser tests."""
     rows = "\n".join(
-        f"| {title} | unchanged, `git log -Gx` → `abc1234` | `a.py:b` | ran | "
+        f"| {title} | unchanged, `git log -Gx` → `abc1234` | "
+        f"`{authority_path(document, title)}:symbol` | ran | "
         f"ran | ran | `tests/a.py:case` | {result} |"
         for title in target_classes(document)
     )
@@ -458,28 +465,37 @@ def permissions_block(text: str) -> str:
 
 def replace_row(body: str, column: str, value: str) -> str:
     """Set one cell on every data row of a complete body, header untouched."""
+    return replace_cells(body, column, lambda title: value)
+
+
+def replace_cells(body: str, column: str, value) -> str:
+    """Set one cell per row, computed from the row's class title."""
     index = TARGET_MODE_COLUMNS.index(column)
     lines = body.splitlines()
-    seen_header = False
     for number, line in enumerate(lines):
         if not line.startswith("|"):
             continue
-        if not seen_header:
-            seen_header = True
-            continue
         cells = line.strip().strip("|").split(" | ")
-        if len(cells) != len(TARGET_MODE_COLUMNS):
+        # Only data rows: the header names the columns and the separator is
+        # all dashes.
+        first = cells[0].strip().lstrip("| ")
+        if len(cells) != len(TARGET_MODE_COLUMNS) or first in ("Class", "---"):
             continue
-        cells[index] = value
+        cells[index] = value(first)
         lines[number] = "| " + " | ".join(cells) + " |"
     return "\n".join(lines) + "\n"
 
 
 def authority_path(document: str, title: str) -> str:
-    """The first file named in a class's `Authority:` line."""
+    """The first path named in a class's `Authority:` sentence.
+
+    The authority wraps and several classes continue with prose, so the parse
+    mirrors `scripts/pr_matrix.py:authorities` rather than reading one line.
+    """
     block = document.split(f"\n## {title}\n", 1)[1].split("\n## ", 1)[0]
-    authority = block.split("\nAuthority: ", 1)[1].split("\n", 1)[0]
-    return re.search(r"`([^`:]+):", authority).group(1)
+    authority = block.split("\nAuthority: ", 1)[1].split("\nMutation control:", 1)[0]
+    first = re.split(r"\.(?:\s|$)", authority, maxsplit=1)[0]
+    return re.search(r"`([^`:]+)", first).group(1)
 
 
 def run_matrix(
@@ -1207,6 +1223,23 @@ class RecurringContractTest(unittest.TestCase):
         self.assertIn("History", broken(replace_row(good, "History", "n/a")))
         self.assertIn("History", broken(replace_row(good, "History", "unchanged")))
         self.assertIn("Mutation control", broken(replace_row(good, "Mutation control", "n/a")))
+        # The guard column must be the recorded authority, not any path: a row
+        # that names a plausible but different file still reads as audited.
+        wrong_guard = broken(replace_row(good, "Authoritative guard", "`nowhere.py:thing`"))
+        self.assertIn("not the recorded authority", wrong_guard)
+        # Positive: the recorded authority passes, including a second one when
+        # the document names more than one for a class.
+        self.assertEqual(
+            run_matrix(
+                replace_cells(
+                    good,
+                    "Authoritative guard",
+                    lambda title: f"`{authority_path(document, title)}:x`",
+                ),
+                document,
+            ).returncode,
+            0,
+        )
         # Positive: every classification word the protocol allows, with the
         # commit that supports it, and a control named by file.
         for classification in ("never fixed", "never established", "regressed", "partial"):
@@ -1241,6 +1274,17 @@ class RecurringContractTest(unittest.TestCase):
               "        if False and not RUNNABLE.search(control):")],
         )
         self.assertEqual(without_control.returncode, 0, without_control.stderr)
+
+        # Mutation control for the guard column: without the comparison any
+        # credible-looking path passes and the row reads as audited.
+        wrong_guard_body = replace_row(good, "Authoritative guard", "`nowhere.py:thing`")
+        without_guard = run_mutated_matrix(
+            wrong_guard_body,
+            document,
+            [('            if not (named & recorded):',
+              '            if False and not (named & recorded):')],
+        )
+        self.assertEqual(without_guard.returncode, 0, without_guard.stderr)
 
         # Mutation control 4: a ninth-but-wrong column shifts every cell.
         widened = good.replace(

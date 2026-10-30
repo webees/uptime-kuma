@@ -98,8 +98,9 @@ One row per class, always these eight columns, in this order:
 - `History` is the `git log -S` / `git log -G` classification plus the commit
   it rests on — `unchanged, git log -Sx → abc1234`, `regressed by abcdef1`.
   A bare `n/a` is not a classification and `validate` rejects it.
-- `Authoritative guard` is one `path:symbol` pair. Two guards for one invariant
-  means the invariant is still fragmented.
+- `Authoritative guard` is one `path:symbol` pair and has to be one the class
+  records under `Authority:`; `validate` compares the paths and rejects
+  anything else. Two guards for one invariant means it is still fragmented.
 - `Positive`, `Boundary` and `Negative` each name the command or test that was
   run, and the row is only filled once that ran.
 - `Mutation control` names the runnable test or command in backticks and states
