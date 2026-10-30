@@ -20,8 +20,11 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 concurrency:
-  group: deploy-drift
-  cancel-in-progress: true
+  # Shared with the publish workflow, so a `main` push is checked after its
+  # deploy finished. Reading while a promotion runs would see the new release
+  # next to the old machine and report "unreadable" on a healthy deploy.
+  group: ghcr-registry
+  cancel-in-progress: false
 
 jobs:
   drift:

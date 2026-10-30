@@ -234,6 +234,12 @@ def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -
     case.assertIn("set -euo pipefail", drift)
     case.assertIn('"${FLY_API_TOKEN:?', drift)
 
+    # The check reads a release and a machine that a promotion moves separately,
+    # so it must not run beside the publish: share its group, never cancel.
+    case.assertIn("  group: ghcr-registry\n", drift)
+    case.assertIn("  cancel-in-progress: false\n", drift)
+    case.assertIn("  group: ghcr-registry\n", build)
+
     # The app comes from `fly.toml`, never from a local default.
     case.assertIn("sed -n 's/^app = \"\\(.*\\)\"$/\\1/p' fly.toml", drift)
     case.assertIn('flyctl releases -a "$app"', drift)
@@ -1194,6 +1200,13 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(unnamed, drift)
         with self.assertRaises(AssertionError):
             assert_drift_check_exists(self, unnamed, build)
+
+        # Seventh control: give the check its own group, so a `main` push can
+        # read the new release against the old machine mid-promotion.
+        racing = drift.replace("  group: ghcr-registry\n", "  group: deploy-drift\n", 1)
+        self.assertNotEqual(racing, drift)
+        with self.assertRaises(AssertionError):
+            assert_drift_check_exists(self, racing, build)
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""

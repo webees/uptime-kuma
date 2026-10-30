@@ -341,6 +341,8 @@ newest completed release, every machine image and the `latest` amd64 child after
 every `main` push and daily, and fails on any difference. Every read is bounded,
 and an unreadable document exits `2` rather than reading as "in sync"; the
 detector is after the fact by design, because a hand deploy cannot be blocked.
+It shares the publish concurrency group and never cancels, since a release and
+a machine move separately and reading between them looks like a broken app.
 
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
