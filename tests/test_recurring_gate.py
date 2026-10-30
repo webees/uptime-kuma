@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import json
+import os
 from pathlib import Path
 import subprocess
 import tomllib
@@ -219,6 +220,62 @@ def assert_weekly_rebuild_is_scheduled(case: unittest.TestCase, build: str) -> N
     case.assertEqual(dow, "1", "the rebuild must run once a week")
     # A weekly schedule changes nothing if the chain is still gated on `main`.
     case.assertIn("github.ref == 'refs/heads/main'", build)
+
+
+def step_script(workflow_text: str, name: str) -> str:
+    """Return one step's shell body, so its guard can actually be executed."""
+    block = workflow_text.split(f"- name: {name}", 1)[1]
+    return block.split("- name:", 1)[0].split("run: |\n", 1)[1]
+
+
+def assert_latest_follows_verification(case: unittest.TestCase, build: str) -> None:
+    """A mutable `latest` published by the build is not a verified reference.
+
+    The metadata step runs before the image exists, so a tag written there moves
+    even when the digest smoke test, the deploy or the readiness verification
+    fails. `latest` therefore stays out of the metadata and is retagged from the
+    run tag only after the verifier has passed.
+    """
+    metadata = build.split("Extract Docker metadata", 1)[1].split("Build and push Docker image", 1)[0]
+    case.assertNotIn("type=raw,value=latest", metadata)
+
+    order = [
+        "Build and push Docker image (Multi-Arch)",
+        "Record the published amd64 digest",
+        "Smoke test the published digest",
+        "Verify the deployment",
+        "Promote the verified image to latest",
+    ]
+    positions = [build.index(name) for name in order]
+    case.assertEqual(positions, sorted(positions), "promotion must follow every gate")
+    case.assertIn("packages: write", build.split("  deploy:", 1)[1])
+
+    promote = step_script(build, "⬆️ Promote the verified image to latest")
+    case.assertIn('--tag "${image}:latest" "${image}@${index_digest}"', promote)
+    guard = 'if [ "$index_amd64" != "$AMD64_DIGEST" ]; then'
+    case.assertIn(guard, promote)
+    final = 'if [ "$latest_index" != "$index_digest" ] || [ "$latest_amd64" != "$AMD64_DIGEST" ]; then'
+    case.assertIn(final, promote)
+
+    def block(text: str, start: str) -> str:
+        begin = text.index(start)
+        end = re.search(r"\n\s*fi\s*\n", text[begin:])
+        assert end is not None
+        return text[begin:begin + end.end()]
+
+    index = "sha256:" + "b" * 64
+    script = (
+        f'index_amd64={index}; index_digest={index}; AMD64_DIGEST={index}; '
+        'latest_index=$LATEST_INDEX; latest_amd64=$LATEST_AMD64\n'
+    ) + block(promote, final)
+    env = os.environ | {"LATEST_INDEX": index, "LATEST_AMD64": index}
+    case.assertEqual(subprocess.run(["/bin/bash", "-c", script], env=env).returncode, 0)
+    other = "sha256:" + "c" * 64
+    for key in ("LATEST_INDEX", "LATEST_AMD64"):
+        case.assertNotEqual(
+            subprocess.run(["/bin/bash", "-c", script], env=env | {key: other}).returncode, 0,
+            f"{key} must be compared",
+        )
 
 
 CRONTAB = ROOT / "config/crontab"
@@ -574,6 +631,34 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(monthly, build)
         with self.assertRaises(AssertionError):
             assert_weekly_rebuild_is_scheduled(self, monthly)
+
+    def test_latest_is_promoted_only_after_verification(self) -> None:
+        """A failed build must leave the mutable tag on the last good image."""
+        build = workflow("ghcr.yaml")
+        assert_latest_follows_verification(self, build)
+
+        # Mutation control: put `latest` back into the build metadata, which is
+        # exactly the pre-fix state a canceled run exposes.
+        early = build.replace(
+            "            type=raw,value=build-${{ github.run_id }}-${{ github.run_attempt }}\n",
+            "            type=raw,value=build-${{ github.run_id }}-${{ github.run_attempt }}\n"
+            "            type=raw,value=latest,enable={{is_default_branch}}\n",
+            1,
+        )
+        self.assertNotEqual(early, build)
+        with self.assertRaises(AssertionError):
+            assert_latest_follows_verification(self, early)
+
+        # Second control: keep the promotion but stop comparing the re-read
+        # tag, so a retag that silently pointed elsewhere would pass.
+        unchecked = build.replace(
+            'if [ "$latest_index" != "$index_digest" ] || [ "$latest_amd64" != "$AMD64_DIGEST" ]; then',
+            "if false; then",
+            1,
+        )
+        self.assertNotEqual(unchecked, build)
+        with self.assertRaises(AssertionError):
+            assert_latest_follows_verification(self, unchecked)
 
     def test_deploy_retries_only_transient_errors(self) -> None:
         build = workflow("ghcr.yaml")
