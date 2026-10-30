@@ -326,18 +326,28 @@ documentation or test edit, so three consecutive baseline bumps each moved
 `latest` and restarted production for no image change. Final decision: the
 `main` push trigger ignores exactly the paths that cannot reach the image
 (`.gitignore`, `README.md`, `LICENSE`, `.github/**`, `docs/**`, `tests/**`,
-`scripts/rebuild.sh`) and those paths must also be excluded from the build
-context, so the two lists cannot silently disagree. `Dockerfile`, `fly.toml`,
-`config/**`, the entrypoint scripts and `scripts/restic.sh`/`scripts/services.sh`
-stay deployable. GitHub does not path-filter tag pushes, and `schedule` and
-`workflow_dispatch` never see the filter, so releases and the weekly rebuild
-still publish.
+`scripts/rebuild.sh`, `scripts/round_open.py`, `scripts/deploy_drift.py`) and
+those paths must also be excluded from the build context, so the two lists
+cannot silently disagree. `Dockerfile`, `fly.toml`, `config/**`, the entrypoint
+scripts and `scripts/restic.sh`/`scripts/services.sh` stay deployable. GitHub
+does not path-filter tag pushes, and `schedule` and `workflow_dispatch` never
+see the filter, so releases and the weekly rebuild still publish.
+
+CI is the only supported release path, but nothing proved that production still
+matched it: a hand `fly deploy` builds the Dockerfile and reaches the machine
+with no digest gate, and a promotion that silently never ran looks identical
+from the outside. Final decision: `.github/workflows/deploy-drift.yml` reads the
+newest completed release, every machine image and the `latest` amd64 child after
+every `main` push and daily, and fails on any difference. Every read is bounded,
+and an unreadable document exits `2` rather than reading as "in sync"; the
+detector is after the fact by design, because a hand deploy cannot be blocked.
 
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
 `.github/workflows/ghcr.yaml:digest`, plus
 `.github/workflows/ghcr.yaml:rebuild_check` with `scripts/rebuild.sh:count` and
-`.github/workflows/ghcr.yaml:paths-ignore` with `.dockerignore`.
+`.github/workflows/ghcr.yaml:paths-ignore` with `.dockerignore`, and
+`.github/workflows/deploy-drift.yml` with `scripts/deploy_drift.py:check`.
 
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
@@ -404,6 +414,11 @@ An ignored path must also be absent from the build context and every `COPY`
 source must stay triggerable, so the ignore list and `.dockerignore` cannot
 diverge; a docs edit is required to stay filtered while `scripts/services.sh`
 is required to stay admitted.
+Drift is proven on fixtures, not on the live app: a matching triple is in sync,
+a hand deploy is drift, a machine and its release disagreeing is unreadable, and
+two amd64 children, an absent machine and an absent completed release all fail
+closed. `tests/test_deploy_drift.py:DeployDriftMutationTest` removes the digest
+comparison, the attestation filter and the release cross-check independently.
 `validate.yml` is both a `workflow_call` target and a standalone workflow, so
 its concurrency group must include the workflow name: keyed only on the ref,
 the nested copy and its standalone twin share a group under
