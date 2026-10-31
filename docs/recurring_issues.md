@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `27f7936` on 2026-11-01,
-extending the previous baseline at `464c63d`. Every later round must extend that
+Audit baseline: every commit reachable through `d26d5e3` on 2026-11-01,
+extending the previous baseline at `27f7936`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -202,7 +202,9 @@ truncation removed, capture-failure guard removed, write-failure guard removed,
 then the post-run guard disabled). A broken `tail` only fails the first stdin
 capture, so removing that guard is what turns the same run from exit 2 into a
 false `ok`; the write control fails only `mktemp` and proves the same downgrade
-for persistence.
+for persistence. The truncation control compares the mutated log against the
+guarded one in the same run, not against a byte count: the entries carry
+timestamps, so a literal count measured its own clock as much as the guard.
 
 Regression gate: oversized output, a failing `tail`, an unmaintainable directory
 before work (backend never called), an unmaintainable directory after work, and
