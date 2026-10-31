@@ -246,6 +246,8 @@ def assert_target_mode_is_actionable(
     case.assertIn("a heading written twice", found["Report order"])
     case.assertIn("the empty\n`## Verification`", found["Report order"])
     case.assertIn("A heading inside a fence is a quotation", found["Report order"])
+    case.assertIn("`## Verification` is the section a reader repeats", found["Report order"])
+    case.assertIn("names no run", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("appears {len(matching)} times", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
 
     # The rejection list is the thing that voids a round; a subset is not one.
@@ -1693,6 +1695,42 @@ class RecurringContractTest(unittest.TestCase):
         )
         self.assertEqual(
             run_matrix(good.replace("## Changes\n", "```\n| x |\n```\n\n## Changes\n", 1), document).returncode,
+            0,
+        )
+        # A verification that says "passed" is a mood: the section exists to
+        # let the next reader repeat the round. Every bullet has to name a
+        # command or carry a link, and a body with none is not a verification.
+        self.assertIn(
+            "`## Verification` names no run",
+            run_matrix(
+                good.replace("## Verification\n", "## Verification\n\npassed\n", 1).replace(
+                    "- `python3.13 -m unittest tests.test_recurring_gate` — `Ran 32 tests OK`\n", "", 1
+                ),
+                document,
+            ).stderr,
+        )
+        self.assertIn(
+            "`## Verification` line 4 names no run",
+            run_matrix(
+                good.replace(
+                    "`Ran 32 tests OK`\n",
+                    "`Ran 32 tests OK`\n- the image was fine\n",
+                    1,
+                ),
+                document,
+            ).stderr,
+        )
+        # A link is a runnable reference of its own, which is how a CI run gets
+        # cited without pasting its log.
+        self.assertEqual(
+            run_matrix(
+                good.replace(
+                    "- `python3.13 -m unittest tests.test_recurring_gate` — `Ran 32 tests OK`",
+                    "- https://github.com/webees/uptime-kuma/actions/runs/1 — `conclusion: success`",
+                    1,
+                ),
+                document,
+            ).returncode,
             0,
         )
 
