@@ -246,6 +246,8 @@ def assert_target_mode_is_actionable(
     case.assertIn("a heading written twice", found["Report order"])
     case.assertIn("the empty\n`## Verification`", found["Report order"])
     case.assertIn("A heading inside a fence is a quotation", found["Report order"])
+    case.assertIn("matched without regard to case", found["Report order"])
+    case.assertIn("def matches(head: str, name: str)", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("`## Verification` is the section a reader repeats", found["Report order"])
     case.assertIn("names no run", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("The command has to still run", found["Report order"])
@@ -1711,6 +1713,26 @@ class RecurringContractTest(unittest.TestCase):
             "`## Residual` appears 2 times",
             run_matrix(duplicate_section(good, "Residual risk"), document).stderr,
         )
+        # GitHub does not care about heading case: `## verification` renders and
+        # reads like the protocol's heading, but the check called it missing.
+        for written, canonical in (
+            ("## verification", "## Verification"),
+            ("## changes", "## Changes"),
+            ("## matrix", "## Matrix"),
+            ("## conclusion", "## Conclusion"),
+            ("## residual risk", "## Residual risk"),
+        ):
+            self.assertEqual(
+                run_matrix(good.replace(canonical, written, 1), document).returncode,
+                0,
+                written,
+            )
+        # Case is not a second name: the same heading twice in another case is
+        # still two sections, and the order walk has to see one.
+        self.assertIn(
+            "`## Matrix` appears 2 times",
+            run_matrix(good.replace("## Matrix", "## matrix\n\ntext\n\n## Matrix", 1), document).stderr,
+        )
         # A fence is how a body quotes an example, and a quoted `## Matrix`
         # used to be read as the section: the real table then failed as
         # "no header". A quoted `## Verification` counted as a second one, and
@@ -1718,14 +1740,15 @@ class RecurringContractTest(unittest.TestCase):
         quoted = good.replace("## Conclusion\n", "## Conclusion\n\n```\n## Matrix\n```\n", 1)
         self.assertEqual(run_matrix(quoted, document).returncode, 0)
         # The same body with the fence mask removed: the quoted heading is read
-        # as the section, and the real table is never reached.
+        # as a second section. The table is still found in the real one, so the
+        # failure is the duplicate rather than a missing header.
         unfenced = run_mutated_matrix(
             quoted,
             document,
             [('r"(?m)^## (.+)$", unfenced(body)', 'r"(?m)^## (.+)$", body')],
         )
-        self.assertEqual(unfenced.returncode, 2, unfenced.stderr)
-        self.assertIn("the matrix has no header", unfenced.stderr)
+        self.assertNotEqual(unfenced.returncode, 0, unfenced.stderr)
+        self.assertIn("`## Matrix` appears 2 times", unfenced.stderr)
         # A quoted heading in the matrix section is not a second section, and a
         # quoted table line is not a row.
         self.assertEqual(
