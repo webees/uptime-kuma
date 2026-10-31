@@ -744,10 +744,15 @@ def check_bounded_diagnostics(image: str) -> None:
             ["@ rc=2"],
             probes(control)[:1],
         )
+        # The guarded run above asserts the exact cap, because truncation
+        # always ends on a boundary. The mutated run is compared to that same
+        # guarded size instead of a literal: the entries carry timestamps, so
+        # their total moves by a few bytes between runs and a count written
+        # here turned the control red on its own.
         suite.same(
             "C5 mutation: the log grows past the cap",
-            "4299",
-            probes(control)[1].split("=")[1],
+            True,
+            int(probes(control)[1].split("=")[1]) > int(probes(guarded)[1].split("=")[1]),
         )
 
         # Dropping the capture-failure guard makes the same broken `tail` look
