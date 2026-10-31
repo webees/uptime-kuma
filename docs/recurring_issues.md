@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `bdd23e0` on 2026-10-31,
-extending the previous baseline at `8234973`. Every later round must extend that
+Audit baseline: every commit reachable through `2e20e5e` on 2026-10-31,
+extending the previous baseline at `bdd23e0`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -531,7 +531,10 @@ Mutation control, and Regression gate sections.
 
 Authority: `tests/test_recurring_gate.py:assert_recurrence_contract`.
 
-Mutation control: `tests/test_recurring_gate.py:test_contract_mutation_removes_authoritative_field`.
+Mutation control: `tests/test_recurring_gate.py:test_contract_mutation_removes_authoritative_field`
+and, for the matrix checks the file carries,
+`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body`, which
+blanks each check in turn and asserts its ghost passes again.
 
 Regression gate: the class set and all five fields per class are required, every
 named reference resolves, every gate clause is present, and every existing
