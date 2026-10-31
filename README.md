@@ -216,6 +216,52 @@ python3 tests/runtime_smoke.py uptime-kuma:local
 Every round starts from its target-mode matrix; `tests/test_recurring_gate.py`
 fails when a class, a field, or a mutation control disappears.
 
+## 🔁 Automation
+
+Six workflows run without a human, and Dependabot updates the action pins:
+
+| Workflow | When | What it does |
+| :--- | :--- | :--- |
+| `upstream-updates.yml` | daily `02:23` UTC | resolves the newest stable Uptime Kuma release, its image digest and the supercronic binaries, rewrites only those five `Dockerfile` pins, opens `deps/upstream`, runs `validate` on that branch, then merges and dispatches the publish chain |
+| `dependabot-automerge.yml` | when Dependabot opens or refreshes a PR | accepts only same-Action SHA/comment replacements, waits for the required `validate` check, then merges the action update directly |
+| `ghcr.yaml` | weekly `Mon 03:17` UTC, plus every push | probes the published image for pending OS packages, builds only when there is something to ship, smoke-tests the digest, deploys it to Fly, verifies the release and only then moves `latest` |
+| `deploy-drift.yml` | after every publish, daily `05:41` UTC | fails when production is not running the digest `latest` was promoted from |
+| `ghcr-cleanup.yml` | daily `03:00` UTC, plus every push | prunes untagged and stale tags without racing a publish |
+| `automation-health.yml` | daily `05:47` UTC, plus watched workflow completions | fails on a failed main-branch workflow and checks that every scheduled workflow is still active and recent |
+
+`upstream-updates.yml` closes the last manual loop: the pins are read from
+GitHub releases and Docker Hub, not from memory. A stable upstream upgrade
+merges on its own once `validate` passes on the branch head, matching the
+Vaultwarden delivery model. A **downgrade** or unexpected **prerelease** stays
+open with the `needs-review` label. Merging dispatches `ghcr.yaml`, since a push
+made with `GITHUB_TOKEN` does not emit a workflow-triggering event; that run
+then builds, smoke-tests, deploys and verifies the new digest.
+
+Its second job is one half of a watchdog pair. It checks `automation-health.yml`,
+`ghcr.yaml`, `deploy-drift.yml` and `ghcr-cleanup.yml`; `automation-health.yml`
+checks `upstream-updates.yml` in return. Each check fails when a workflow is
+disabled or has not succeeded within its cadence (weekly `192h`, daily `48h`).
+GitHub disables a schedule after 60 idle days, and a cron that silently stops
+firing otherwise looks the same as "nothing to update". A workflow cannot see
+its own disabled state, so the mutual pair is deliberate; neither check claims
+to monitor itself.
+
+`.github/dependabot.yml` opens a grouped daily PR when an immutable GitHub
+Actions SHA has a newer release. `dependabot-automerge.yml` checks the API diff
+against the trusted default branch and accepts only complete remote Action
+`uses: owner/action@40-sha # version` replacements for the same Action. Workflow
+logic, local actions, added/deleted files, short refs, missing comments and
+cross-hunk moves fail closed. The PR still runs the normal `validate` path;
+only a green required check is merged.
+
+Run the check by hand without merging:
+
+```bash
+gh workflow run upstream-updates.yml
+python3.13 scripts/upstream_deps.py resolve    # pins the API currently returns
+python3.13 scripts/upstream_deps.py compare --uptime-version … --uptime-digest …
+```
+
 ## ⚠️ Residual risk
 
 - The `validate` context is enforced on `main` for admins too and has been

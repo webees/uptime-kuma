@@ -1,0 +1,265 @@
+name: ⬆️ Upstream Updates
+
+# Five pins move without anyone touching this repository: the Uptime Kuma
+# release, the digest of its image, the supercronic release, and the two
+# architecture checksums. Nothing read them on a schedule, so a security
+# release could sit unseen until a human opened the upstream page.
+#
+# The job resolves the public metadata, rewrites only the five pin lines,
+# validates the branch with the same `validate` workflow a human PR runs, and
+# merges it. `ghcr.yaml` is dispatched afterwards because a merge made with
+# `GITHUB_TOKEN` does not emit a workflow-triggering push.
+on:
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+    inputs:
+      auto_merge:
+        description: "Merge a patch-level update after validate (schedule always does)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+
+# Two runs rewriting one branch would race the force-push; a queued run is the
+# one worth keeping, because it sees the newer upstream release.
+concurrency:
+  group: upstream-updates
+  cancel-in-progress: false
+
+env:
+  BRANCH: deps/upstream
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The schedule is the automation the README promises. A manual run is a
+      # check unless the operator asks for the merge as well.
+      AUTO_MERGE: ${{ github.event_name == 'schedule' || inputs.auto_merge }}
+    steps:
+      - name: 📥 Check out the default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+
+      - name: 🔎 Resolve the upstream pins
+        id: pins
+        run: |
+          set -euo pipefail
+          timeout 300 python3 scripts/upstream_deps.py resolve \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: 📊 Compare against the Dockerfile
+        id: compare
+        run: |
+          set -euo pipefail
+          timeout 120 python3 scripts/upstream_deps.py compare \
+            --uptime-version "${{ steps.pins.outputs.uptime_version }}" \
+            --uptime-digest "${{ steps.pins.outputs.uptime_digest }}" \
+            --supercronic-version "${{ steps.pins.outputs.supercronic_version }}" \
+            --supercronic-sha-amd64 "${{ steps.pins.outputs.supercronic_sha_amd64 }}" \
+            --supercronic-sha-arm64 "${{ steps.pins.outputs.supercronic_sha_arm64 }}" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: 🛑 Stop when the pins are current
+        if: steps.compare.outputs.changed != 'true'
+        run: echo "every pin already names the newest upstream release"
+
+      - name: ✏️ Apply the pins and push the branch
+        id: branch
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          python3 scripts/upstream_deps.py apply \
+            --uptime-version "${{ steps.pins.outputs.uptime_version }}" \
+            --uptime-digest "${{ steps.pins.outputs.uptime_digest }}" \
+            --supercronic-version "${{ steps.pins.outputs.supercronic_version }}" \
+            --supercronic-sha-amd64 "${{ steps.pins.outputs.supercronic_sha_amd64 }}" \
+            --supercronic-sha-arm64 "${{ steps.pins.outputs.supercronic_sha_arm64 }}"
+          # Only the pin file may move: a script that rewrote something else
+          # would smuggle an unrelated change past the diff review.
+          git diff --name-only | sort > "$RUNNER_TEMP/changed.txt"
+          [ "$(cat "$RUNNER_TEMP/changed.txt")" = "Dockerfile" ] || {
+            echo "::error::the update touched more than Dockerfile" >&2
+            cat "$RUNNER_TEMP/changed.txt" >&2
+            exit 1
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add Dockerfile
+          git commit -m "chore(deps): update pinned upstream images"
+          git push --force origin "$BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 📝 Open or refresh the pull request
+        id: pr
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          SHA: ${{ steps.branch.outputs.sha }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/deps-pr.md"
+          {
+            echo "Automated upstream pins."
+            echo
+            echo "| Pin | Value |"
+            echo "| :--- | :--- |"
+            echo "| Uptime Kuma | \`${{ steps.pins.outputs.uptime_version }}\` |"
+            echo "| Image digest | \`${{ steps.pins.outputs.uptime_digest }}\` |"
+            echo "| supercronic | \`${{ steps.pins.outputs.supercronic_version }}\` |"
+            echo
+            echo "Bump: \`${{ steps.compare.outputs.bump }}\`. Merging builds a"
+            echo "timestamped image, smoke-tests the published digest, deploys it"
+            echo "to Fly, verifies the release and only then moves \`latest\`."
+          } > "$body"
+          number="$(timeout 60 gh pr list --repo "$GITHUB_REPOSITORY" \
+            --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            timeout 60 gh pr edit "$number" --repo "$GITHUB_REPOSITORY" \
+              --body-file "$body"
+          else
+            timeout 60 gh pr create --repo "$GITHUB_REPOSITORY" \
+              --base main --head "$BRANCH" \
+              --title "chore(deps): update pinned upstream images" \
+              --body-file "$body" >/dev/null
+            number="$(timeout 60 gh pr list --repo "$GITHUB_REPOSITORY" \
+              --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          fi
+          [[ "$number" =~ ^[1-9][0-9]*$ ]] || { echo "::error::no dependency pull request" >&2; exit 1; }
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "opened dependency pull request #${number} for ${SHA}"
+
+      - name: ✅ Validate the pushed branch
+        id: validate
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          SHA: ${{ steps.branch.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # `GITHUB_TOKEN` does not emit pull_request events, so the same
+          # workflow a human PR runs is dispatched against the branch ref. The
+          # check lands on the head SHA, which is what branch protection reads.
+          timeout 60 gh workflow run validate.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id="$(timeout 60 gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/validate.yml/runs?per_page=30" \
+              --jq "[.workflow_runs[] | select(.head_sha == \"${SHA}\" and .event == \"workflow_dispatch\")] | first | .id // empty")"
+            [ -n "$run_id" ] && break
+            sleep 10
+          done
+          [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::the validate run never appeared" >&2; exit 1; }
+          for _ in $(seq 1 120); do
+            status="$(timeout 30 gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)"
+            [ "$status" = completed ] && break
+            sleep 30
+          done
+          conclusion="$(timeout 30 gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .conclusion)"
+          [ "$conclusion" = success ] || {
+            echo "::error::validate finished ${conclusion} for ${SHA}" >&2
+            exit 1
+          }
+          echo "run=${run_id}" >> "$GITHUB_OUTPUT"
+          echo "validate ${conclusion} on ${SHA}"
+
+      - name: 🔀 Merge a validated upstream upgrade
+        id: merge
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          NUMBER: ${{ steps.pr.outputs.number }}
+          SHA: ${{ steps.branch.outputs.sha }}
+          BUMP: ${{ steps.compare.outputs.bump }}
+        run: |
+          set -euo pipefail
+          if [ "$AUTO_MERGE" != true ]; then
+            echo "auto-merge is off for this run; leaving #${NUMBER} open"
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A stable upstream release is the same maintenance path Vaultwarden
+          # automates. The full image/runtime gate below is authoritative; only
+          # a downgrade or an unexpected prerelease is held for a human.
+          if [ "$BUMP" = downgrade ] || [ "$BUMP" = prerelease ]; then
+            timeout 60 gh label create needs-review --force --repo "$GITHUB_REPOSITORY" \
+              --color FBCA04 --description "Automated dependency update that needs a human"
+            timeout 60 gh pr edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label needs-review
+            echo "::notice::#${NUMBER} is a ${BUMP} change and stays open for review"
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The SHA the checks ran against is the SHA that merges: a branch
+          # that moved in between is refused instead of merged untested.
+          timeout 120 gh pr merge "$NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --squash --delete-branch --match-head-commit "$SHA"
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+      - name: 🚀 Dispatch the build and deploy
+        if: steps.merge.outputs.merged == 'true'
+        env:
+          NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          merge_sha="$(timeout 60 gh pr view "$NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json mergeCommit --jq '.mergeCommit.oid // empty')"
+          [[ "$merge_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::merged pull request has no SHA" >&2; exit 1; }
+          # A push made with `GITHUB_TOKEN` creates no workflow run, so the
+          # publish chain has to be dispatched explicitly.
+          timeout 60 gh workflow run ghcr.yaml --repo "$GITHUB_REPOSITORY" \
+            --ref main -f mode=force
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id="$(timeout 60 gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/ghcr.yaml/runs?per_page=30" \
+              --jq "[.workflow_runs[] | select(.head_sha == \"${merge_sha}\" and .event == \"workflow_dispatch\")] | first | .id // empty")"
+            [ -n "$run_id" ] && break
+            sleep 10
+          done
+          [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::the publish run never appeared" >&2; exit 1; }
+          for _ in $(seq 1 160); do
+            status="$(timeout 30 gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)"
+            [ "$status" = completed ] && break
+            sleep 30
+          done
+          conclusion="$(timeout 30 gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .conclusion)"
+          [ "$conclusion" = success ] || {
+            echo "::error::publish finished ${conclusion}; production still runs the previous digest" >&2
+            exit 1
+          }
+          echo "publish run ${run_id} finished ${conclusion} for ${merge_sha}"
+
+  # A schedule that GitHub disables after 60 idle days, or a cron that silently
+  # stops firing, is indistinguishable from "nothing needed updating". This
+  # job deliberately does not check itself: a disabled workflow cannot run its
+  # own watchdog. `automation-health.yml` checks this file, and this job checks
+  # that workflow, so either half being disabled makes the other half red.
+  watchdog:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: 📥 Check out the scheduled checks
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: 🕒 Every scheduled workflow still succeeds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          timeout 120 python3 scripts/check_schedules.py \
+            --workflow ghcr.yaml=192 \
+            --workflow deploy-drift.yml=48 \
+            --workflow ghcr-cleanup.yml=48 \
+            --workflow automation-health.yml=48

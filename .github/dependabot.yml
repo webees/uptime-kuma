@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Keep the immutable action SHAs current. Dependabot updates the trailing
+  # release comment with the SHA in the same pull request, preserving both the
+  # pin and its reviewable version.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      github-actions:
+        patterns:
+          - '*'

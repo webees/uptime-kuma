@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import json
+import importlib.util
 import os
 import stat
 import sys
@@ -557,6 +558,100 @@ def assert_drift_workflow_is_registered(case: unittest.TestCase, workflows: dict
     case.assertIn("deploy-drift.yml", workflows)
 
 
+def assert_upstream_updates_are_bounded(case: unittest.TestCase, updates: str) -> None:
+    """A pin nobody reads goes stale, and a bot that merges anything is worse.
+
+    The job has to run on its own, resolve the pins through the tested script,
+    merge a stable upgrade only after the branch's own validate run passed,
+    keep a downgrade or prerelease open for a human, and dispatch the publish
+    chain, because a merge made with `GITHUB_TOKEN` emits no push event.
+    """
+    crons = schedule_entries(updates)
+    case.assertEqual(len(crons), 1, "one update slot is expected")
+    case.assertEqual(crons[0].split()[2:], ["*", "*", "*"], "the check must run every day")
+    case.assertIn("  workflow_dispatch:", updates)
+    case.assertIn("  contents: write\n", updates)
+    case.assertIn("  issues: write\n", updates)
+    case.assertIn("  pull-requests: write\n", updates)
+    case.assertIn("  actions: write\n", updates)
+    case.assertIn("  group: upstream-updates\n", updates)
+    case.assertIn("  cancel-in-progress: false\n", updates)
+
+    # The API reading and the file rewriting live in one tested script, so the
+    # workflow cannot drift into unvalidated inline edits.
+    case.assertIn("python3 scripts/upstream_deps.py resolve", updates)
+    case.assertIn("python3 scripts/upstream_deps.py compare", updates)
+    case.assertIn("python3 scripts/upstream_deps.py apply", updates)
+    case.assertNotIn("sed -i", updates)
+
+    # Only the pin file may move, and the whole job is time-boxed.
+    case.assertIn("timeout-minutes: ", updates)
+    case.assertIn('[ "$(cat "$RUNNER_TEMP/changed.txt")" = "Dockerfile" ]', updates)
+
+    # Merge waits for the dispatched validate run on the same SHA.
+    case.assertIn("gh workflow run validate.yml", updates)
+    case.assertIn('--match-head-commit "$SHA"', updates)
+    case.assertIn('if [ "$BUMP" = downgrade ] || [ "$BUMP" = prerelease ]; then', updates)
+    case.assertIn("gh label create needs-review --force", updates)
+    case.assertLess(
+        updates.index("gh workflow run validate.yml"),
+        updates.index('--match-head-commit "$SHA"'),
+        "the merge must come after the validate dispatch",
+    )
+
+    # A `GITHUB_TOKEN` merge does not trigger the push build, so it is
+    # dispatched by name and the job waits for its conclusion.
+    case.assertIn("gh workflow run ghcr.yaml", updates)
+    case.assertIn("--ref main -f mode=force", updates)
+    case.assertIn('[ "$conclusion" = success ]', updates)
+
+
+def assert_schedules_are_watched(case: unittest.TestCase, updates: str) -> None:
+    """A disabled or stalled schedule reads exactly like "nothing to update"."""
+    case.assertIn("  watchdog:\n", updates)
+    case.assertIn("github.event_name == 'schedule'", updates.split("  watchdog:", 1)[1])
+    case.assertIn("python3 scripts/check_schedules.py", updates)
+    for name, limit in (
+        ("ghcr.yaml", "192"),
+        ("deploy-drift.yml", "48"),
+        ("ghcr-cleanup.yml", "48"),
+        ("automation-health.yml", "48"),
+    ):
+        case.assertIn(f"--workflow {name}={limit}", updates, f"{name} is not watched")
+    # A workflow cannot observe that it has been disabled, so neither half may
+    # pretend checking itself is enough.
+    case.assertNotIn("--workflow upstream-updates.yml=", updates)
+
+
+def assert_automation_health_is_independent(case: unittest.TestCase, health: str) -> None:
+    """Two scheduled watchdogs have to cover each other by name."""
+    crons = schedule_entries(health)
+    case.assertEqual(len(crons), 1, "one health-check slot is expected")
+    case.assertIn("  workflow_run:\n", health)
+    case.assertIn("    branches: [main]\n", health)
+    case.assertIn("github.event.workflow_run.conclusion != 'skipped'", health)
+    case.assertIn('if [ "$CONCLUSION" != success ]; then', health)
+    case.assertIn("timeout 120 python3 scripts/check_schedules.py", health)
+    for name, limit in (
+        ("upstream-updates.yml", "48"),
+        ("ghcr.yaml", "192"),
+        ("deploy-drift.yml", "48"),
+        ("ghcr-cleanup.yml", "48"),
+    ):
+        case.assertIn(f"--workflow {name}={limit}", health, f"{name} is not watched")
+    case.assertNotIn("--workflow automation-health.yml=", health)
+
+
+def assert_action_updates_are_scheduled(case: unittest.TestCase, dependabot: str) -> None:
+    """Pinned actions still need a bounded source of upgrades."""
+    case.assertRegex(dependabot, r"(?m)^version: 2$")
+    case.assertIn("package-ecosystem: github-actions", dependabot)
+    case.assertIn("directory: /\n", dependabot)
+    case.assertIn("interval: daily", dependabot)
+    case.assertIn("open-pull-requests-limit: 5", dependabot)
+    case.assertIn('prefix: "chore(ci)"', dependabot)
+
+
 def assert_required_check_is_a_job(case: unittest.TestCase, recorded: str, validate: str) -> None:
     """A required context that names no job blocks `main` forever.
 
@@ -846,6 +941,9 @@ PUSH_IGNORABLE = {
     "scripts/deploy_drift.py",
     "scripts/branch_rule.py",
     "scripts/pr_matrix.py",
+    "scripts/check_schedules.py",
+    "scripts/upstream_deps.py",
+    "scripts/validate_action_pin_update.py",
 }
 
 
@@ -2084,6 +2182,21 @@ class RecurringContractTest(unittest.TestCase):
             run_matrix(partial, document, ["docs/target_mode.md"]).stderr,
         )
         self.assertEqual(run_matrix(partial, document, ["scripts/pr_matrix.py"]).returncode, 0)
+        # Repository dotfiles are changed paths too. The extension-only file
+        # shape read `.dockerignore` as prose, so a real change could not name
+        # itself even when the bullet was complete.
+        dotfile = good.replace(
+            "## Changes\n\nx", "## Changes\n\n- `.dockerignore`: narrowed.", 1
+        )
+        self.assertEqual(run_matrix(dotfile, document, [".dockerignore"]).returncode, 0)
+        # A dotfile pattern must not turn the suffix of a glob into a missing
+        # file: both `scripts/*.sh` and `test_*.py` are commands, not paths.
+        globbed = good.replace(
+            "## Verification\n",
+            "## Verification\n\n- `shellcheck scripts/*.sh` — `rc=0`\n",
+            1,
+        )
+        self.assertEqual(run_matrix(globbed, document).returncode, 0)
         # A bullet may name a directory when the change is a rule across it.
         # `docs/` ends in a slash, which the file pattern does not read, so a
         # whole-directory change landed as "names no file" and lost its
@@ -2934,7 +3047,15 @@ class RecurringContractTest(unittest.TestCase):
             path.name: path.read_text(encoding="utf-8")
             for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
         }
-        self.assertEqual(len(workflows), 4)
+        self.assertEqual(set(workflows), {
+            "automation-health.yml",
+            "deploy-drift.yml",
+            "dependabot-automerge.yml",
+            "ghcr-cleanup.yml",
+            "ghcr.yaml",
+            "upstream-updates.yml",
+            "validate.yml",
+        })
         assert_actions_are_pinned(self, workflows)
 
         # Mutation control: one floating tag is enough to fail, and the message
@@ -3209,6 +3330,254 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(renamed, build)
         with self.assertRaises(AssertionError):
             assert_drift_check_exists(self, drift, renamed)
+
+    def test_upstream_updates_are_scheduled_and_gated(self) -> None:
+        """The pins move every day; nobody reads four upstream sources by hand."""
+        updates = workflow("upstream-updates.yml")
+        health = workflow("automation-health.yml")
+        dependabot = (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
+        assert_upstream_updates_are_bounded(self, updates)
+        assert_schedules_are_watched(self, updates)
+        assert_automation_health_is_independent(self, health)
+        assert_action_updates_are_scheduled(self, dependabot)
+
+        # Mutation control 1: merge without pinning the SHA the checks ran
+        # against, so a branch that moved in between merges untested.
+        unpinned = updates.replace('--squash --delete-branch --match-head-commit "$SHA"',
+                                   "--squash --delete-branch", 1)
+        self.assertNotEqual(unpinned, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, unpinned)
+
+        # Second control: remove the downgrade/prerelease hold, so a validated
+        # stable upgrade and an unsafe rollback follow the same merge path.
+        any_bump = updates.replace(
+            'if [ "$BUMP" = downgrade ] || [ "$BUMP" = prerelease ]; then',
+            'if false; then',
+            1,
+        )
+        self.assertNotEqual(any_bump, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, any_bump)
+
+        # Third control: merge without dispatching the publish chain, so the
+        # new digest is never built, deployed or promoted.
+        unpushed = updates.replace("gh workflow run ghcr.yaml", "echo skipped", 1)
+        self.assertNotEqual(unpushed, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, unpushed)
+
+        # Fourth control: a monthly check is not a daily one.
+        monthly = updates.replace("'23 2 * * *'", "'23 2 1 * *'", 1)
+        self.assertNotEqual(monthly, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, monthly)
+
+        # Fifth control: withhold the write scopes the merge and dispatch need.
+        readonly = updates.replace("  pull-requests: write\n", "  pull-requests: read\n", 1)
+        self.assertNotEqual(readonly, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, readonly)
+
+        # Sixth control: watch only the daily schedules and leave the weekly
+        # publish uncovered, which is the one whose silence costs the most.
+        partial = updates.replace("--workflow ghcr.yaml=192", "--workflow gone.yaml=192", 1)
+        self.assertNotEqual(partial, updates)
+        with self.assertRaises(AssertionError):
+            assert_schedules_are_watched(self, partial)
+
+        # Seventh control: a second, non-schedule trigger on the watchdog would
+        # fail every push; it must be a scheduled reminder only.
+        always = updates.replace("    if: github.event_name == 'schedule'\n", "", 1)
+        self.assertNotEqual(always, updates)
+        with self.assertRaises(AssertionError):
+            assert_schedules_are_watched(self, always)
+
+        # Eighth control: the two watchdogs must name each other. Removing
+        # either half leaves that workflow unable to report its own disablement.
+        no_health = updates.replace("--workflow automation-health.yml=48", "", 1)
+        self.assertNotEqual(no_health, updates)
+        with self.assertRaises(AssertionError):
+            assert_schedules_are_watched(self, no_health)
+        no_upstream = health.replace("--workflow upstream-updates.yml=48", "", 1)
+        self.assertNotEqual(no_upstream, health)
+        with self.assertRaises(AssertionError):
+            assert_automation_health_is_independent(self, no_upstream)
+
+        # Ninth control: dropping the action ecosystem leaves every immutable
+        # SHA pinned forever while the file still looks like a valid config.
+        no_actions = dependabot.replace("package-ecosystem: github-actions", "package-ecosystem: npm", 1)
+        self.assertNotEqual(no_actions, dependabot)
+        with self.assertRaises(AssertionError):
+            assert_action_updates_are_scheduled(self, no_actions)
+
+    def test_upstream_deps_resolves_and_rewrites_only_the_pins(self) -> None:
+        """The script is the only writer of the five moving lines."""
+        script = ROOT / "scripts/upstream_deps.py"
+        original = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        spec = importlib.util.spec_from_file_location("upstream_deps", script)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        pinned = {name.replace("_", "-"): value for name, value in module.current().items()}
+
+        def numbers(value: str) -> tuple[int, int, int]:
+            parts = [int(part) for part in re.split(r"[-+]", value, maxsplit=1)[0].split(".")]
+            return tuple((parts + [0, 0])[:3])
+
+        def lower(value: str) -> str:
+            major, minor, patch = numbers(value)
+            if patch:
+                return f"{major}.{minor}.{patch - 1}"
+            if minor:
+                return f"{major}.{minor - 1}.999"
+            if major:
+                return f"{major - 1}.999.999"
+            return "0.0.0"
+
+        def run(tmp: Path, command: str, values: dict[str, str]) -> subprocess.CompletedProcess[str]:
+            args = [sys.executable, str(script), command]
+            for name, value in values.items():
+                args.extend([f"--{name}", value])
+            return subprocess.run(args, capture_output=True, text=True, cwd=ROOT,
+                                  env=os.environ | {"UPSTREAM_DEPS_DOCKERFILE": str(tmp)})
+
+        values = dict(pinned)
+        major, minor, patch = numbers(pinned["uptime-version"])
+        patch_version = (
+            f"{major}.{minor}.0" if "-" in pinned["uptime-version"]
+            else f"{major}.{minor}.{patch + 1}"
+        )
+        with tempfile.TemporaryDirectory(prefix="upstream-deps-") as directory:
+            tmp = Path(directory) / "Dockerfile"
+            tmp.write_text(original, encoding="utf-8")
+            # The current pins compare clean, so an unchanged upstream is quiet.
+            same = run(tmp, "compare", values)
+            self.assertEqual(same.returncode, 0, same.stderr)
+            self.assertIn("changed=false", same.stdout)
+            self.assertIn("bump=patch", same.stdout)
+
+            # A patch jump inside the same minor is the auto-merge case.
+            patched = values | {"uptime-version": patch_version}
+            self.assertIn("bump=patch", run(tmp, "compare", patched).stdout)
+            # A minor jump changes behaviour and must stay open for review.
+            next_minor = values | {"uptime-version": f"{major}.{minor + 1}.0"}
+            self.assertIn("bump=minor", run(tmp, "compare", next_minor).stdout)
+            # A prerelease is never auto-merged, whatever its numbers say.
+            pre = values | {"uptime-version": f"{patch_version}-rc.1"}
+            self.assertIn("bump=prerelease", run(tmp, "compare", pre).stdout)
+            # Neither a rollback nor a tool downgrade may look like a patch.
+            older = values | {"uptime-version": lower(pinned["uptime-version"])}
+            self.assertIn("bump=downgrade", run(tmp, "compare", older).stdout)
+            tools = values | {
+                "supercronic-version": lower(pinned["supercronic-version"])
+            }
+            self.assertIn("bump=downgrade", run(tmp, "compare", tools).stdout)
+
+            # Apply rewrites exactly the five pin lines and nothing else.
+            tool_major, tool_minor, tool_patch = numbers(pinned["supercronic-version"])
+            changed = values | {
+                "uptime-version": patch_version,
+                "uptime-digest": "sha256:" + "a" * 64,
+                "supercronic-version": f"{tool_major}.{tool_minor}.{tool_patch + 1}",
+                "supercronic-sha-amd64": "b" * 64,
+                "supercronic-sha-arm64": "c" * 64,
+            }
+            applied = run(tmp, "apply", changed)
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            rewritten = tmp.read_text(encoding="utf-8")
+            self.assertEqual(len(original.splitlines()), len(rewritten.splitlines()))
+            self.assertIn(f"ARG UPTIME_KUMA_VERSION={patch_version}", rewritten)
+            self.assertIn(f"@sha256:{'a' * 64}", rewritten)
+            self.assertIn(f"/v{tool_major}.{tool_minor}.{tool_patch + 1}/", rewritten)
+            self.assertIn(f"ARG SUPERCRONIC_SHA256_amd64={'b' * 64}", rewritten)
+            self.assertIn(f"ARG SUPERCRONIC_SHA256_arm64={'c' * 64}", rewritten)
+            self.assertEqual(
+                sum(a != b for a, b in zip(original.splitlines(), rewritten.splitlines())), 5
+            )
+
+            # A malformed digest is refused before anything is written.
+            broken = dict(changed, **{"uptime-digest": "sha256:nothex"})
+            before = tmp.read_text(encoding="utf-8")
+            refused = run(tmp, "apply", broken)
+            self.assertEqual(refused.returncode, 1)
+            self.assertIn("refused", refused.stderr)
+            self.assertEqual(tmp.read_text(encoding="utf-8"), before)
+
+        # Mutation control: rename one ARG and the script can no longer find a
+        # pin, so a partial rewrite is impossible instead of silently partial.
+        with tempfile.TemporaryDirectory(prefix="upstream-deps-") as directory:
+            tmp = Path(directory) / "Dockerfile"
+            tmp.write_text(original.replace("ARG SUPERCRONIC_SHA256_arm64=", "ARG SC_ARM=", 1),
+                           encoding="utf-8")
+            renamed = run(tmp, "compare", values)
+            self.assertEqual(renamed.returncode, 1)
+            self.assertIn("supercronic_sha_arm64", renamed.stderr)
+
+    def test_schedule_checker_fails_closed(self) -> None:
+        """Disabled, stale, malformed, and future schedules are not healthy."""
+        path = ROOT / "scripts/check_schedules.py"
+        spec = importlib.util.spec_from_file_location("check_schedules", path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        now = module.datetime(2026, 11, 1, 12, tzinfo=module.timezone.utc)
+        original = module.fetch_json
+        try:
+            def healthy(url: str) -> dict:
+                if "/runs?" in url:
+                    return {"workflow_runs": [{"created_at": "2026-11-01T11:00:00Z"}]}
+                return {"state": "active", "created_at": "2026-10-01T00:00:00Z"}
+
+            module.fetch_json = healthy
+            module.check_workflow("owner/repo", "ghcr.yaml", 192, now, "https://api.example")
+
+            def disabled(url: str) -> dict:
+                return {"state": "disabled_inactivity", "created_at": "2026-10-01T00:00:00Z"}
+
+            module.fetch_json = disabled
+            with self.assertRaises(module.Refused):
+                module.check_workflow("owner/repo", "ghcr.yaml", 192, now, "https://api.example")
+
+            def stale(url: str) -> dict:
+                if "/runs?" in url:
+                    return {"workflow_runs": [{"created_at": "2026-10-20T00:00:00Z"}]}
+                return {"state": "active", "created_at": "2026-10-01T00:00:00Z"}
+
+            module.fetch_json = stale
+            with self.assertRaises(module.Refused):
+                module.check_workflow("owner/repo", "ghcr.yaml", 48, now, "https://api.example")
+
+            def newly_scheduled(url: str) -> dict:
+                if "/runs?" in url:
+                    return {"workflow_runs": []}
+                return {
+                    "state": "active",
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "updated_at": "2026-11-01T10:00:00Z",
+                }
+
+            module.fetch_json = newly_scheduled
+            module.check_workflow("owner/repo", "ghcr.yaml", 48, now, "https://api.example")
+
+            def future(url: str) -> dict:
+                if "/runs?" in url:
+                    return {"workflow_runs": [{"created_at": "2026-11-02T00:00:00Z"}]}
+                return {"state": "active", "created_at": "2026-10-01T00:00:00Z"}
+
+            module.fetch_json = future
+            with self.assertRaises(module.Refused):
+                module.check_workflow("owner/repo", "ghcr.yaml", 48, now, "https://api.example")
+        finally:
+            module.fetch_json = original
+
+        self.assertEqual(module.parse_spec("upstream-updates.yml=48"),
+                         ("upstream-updates.yml", 48))
+        with self.assertRaises(module.argparse.ArgumentTypeError):
+            module.parse_spec("../escape.yml=48")
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""

@@ -1,0 +1,89 @@
+name: 🤖 Dependabot Auto-Merge
+
+# `pull_request_target` has a write token and secrets. Never check out or run
+# the pull request tree: this workflow reads the changed lines through the API,
+# checks out only the trusted default-branch revision, and validates that every
+# changed line is a same-Action SHA/comment replacement.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-merge:
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: 📥 Check out the trusted base revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: 🔬 Accept only remote Action pin updates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          files="$(timeout 90 gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100")"
+          printf '%s' "$files" | python3 scripts/validate_action_pin_update.py
+
+      - name: ✅ Wait for the required validate check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 90); do
+            state="$(timeout 60 gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --json statusCheckRollup --jq '
+                [.statusCheckRollup[]
+                 | select((.name // .context // "") == "validate")
+                 | (.conclusion // .state // "")]
+                | last // empty')"
+            case "$state" in
+              SUCCESS|success)
+                echo "validate passed for pull request #${PR_NUMBER}"
+                exit 0
+                ;;
+              FAILURE|failure|CANCELLED|cancelled|TIMED_OUT|timed_out|ACTION_REQUIRED|action_required|STARTUP_FAILURE|startup_failure)
+                echo "::error::validate finished ${state} for pull request #${PR_NUMBER}" >&2
+                exit 1
+                ;;
+              "")
+                echo "waiting for validate to register (${attempt}/90)"
+                ;;
+              *)
+                echo "validate is ${state} (${attempt}/90)"
+                ;;
+            esac
+            sleep 20
+          done
+          echo "::error::validate did not pass before the deadline" >&2
+          exit 1
+
+      - name: 🔀 Merge the validated action update
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "::error::invalid pull request number" >&2; exit 1; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::invalid pull request head SHA" >&2; exit 1; }
+          timeout 120 gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --squash --delete-branch --match-head-commit "$HEAD_SHA"

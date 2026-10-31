@@ -79,12 +79,14 @@ jobs:
           "$tmp/actionlint" -no-color
 
       # Every path proves the image: ghcr.yaml reuses this workflow and must
-      # never publish a commit whose runtime gates did not run.
+      # never publish a commit whose runtime gates did not run. Dependabot has
+      # no round matrix; its separate API-diff workflow accepts only complete
+      # same-Action pin replacements before requiring this validation gate.
       # The matrix is a rejection criterion in docs/target_mode.md, so the body
       # is checked instead of reviewed by eye. Only a PR has a body; the push
       # and `workflow_call` copies legitimately carry none.
       - name: 🧾 Round matrix
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}

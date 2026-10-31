@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `97b5754` on 2026-11-01,
-extending the previous baseline at `fbf44f1`. Every later round must extend that
+Audit baseline: every commit reachable through `2a2b472` on 2026-11-01,
+extending the previous baseline at `97b5754`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -344,6 +344,28 @@ The probe is otherwise only reachable on Mondays, so `workflow_dispatch`
 carries a `mode` choice: `force` (default) publishes unconditionally and `probe`
 runs the scheduled decision, which keeps the skip path exercisable on demand.
 
+Moving pins had no scheduled owner either. The base-image version and digest,
+the supercronic release, and both architecture checksums could stay stale even
+while every workflow was green. Final decision: `upstream-updates.yml` resolves
+those five values daily through the bounded, tested `scripts/upstream_deps.py`,
+rewrites only `Dockerfile`, pushes `deps/upstream`, dispatches `validate` on
+that exact SHA, and merges a stable upgrade after the run succeeds, matching the
+Vaultwarden delivery model. A prerelease or downgrade stays open with
+`needs-review`. The merge explicitly dispatches `ghcr.yaml`, because a push made
+with `GITHUB_TOKEN` does not create a workflow-triggering event.
+
+An automated update still needs an owner when its own schedule disappears.
+`upstream-updates.yml` and `automation-health.yml` therefore watch each other
+through `scripts/check_schedules.py`, while also checking the weekly publish,
+drift, and cleanup schedules. A workflow cannot observe its own disabled state,
+so checking itself would have looked like coverage without being coverage.
+`.github/dependabot.yml` separately opens a grouped daily PR for immutable
+action pins. `dependabot-automerge.yml` executes only trusted base-branch code,
+validates every changed line through `scripts/validate_action_pin_update.py`,
+waits for the required `validate` check, and then merges the PR directly. It
+rejects logic changes, new paths, local actions, short refs, missing version
+comments, incomplete pairs, and cross-hunk moves.
+
 Publication history: the metadata step used to write `latest` before the image
 existed, so the mutable tag moved even when the digest smoke test, the deploy,
 or the readiness verification failed; a cancelled run left it on an unverified
@@ -406,7 +428,12 @@ Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/ghcr.yaml:rebuild_check` with `scripts/rebuild.sh:count` and
 `.github/workflows/ghcr.yaml:paths-ignore` with `.dockerignore`, and
 `.github/workflows/deploy-drift.yml` with `scripts/deploy_drift.py:check`, and
-`.github/workflows/ghcr-cleanup.yml:cleanup`.
+`.github/workflows/ghcr-cleanup.yml:cleanup`, and
+`.github/workflows/upstream-updates.yml:update` with
+`scripts/upstream_deps.py:compare` and
+`scripts/check_schedules.py:check_workflow`, and
+`.github/workflows/dependabot-automerge.yml:validate-and-merge` with
+`scripts/validate_action_pin_update.py:validate`.
 The recorded branch rule is `docs/branch_protection.json`, read by
 `scripts/branch_rule.py:compare`.
 
@@ -415,6 +442,14 @@ Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_pl
 `tests/test_recurring_gate.py:test_latest_is_promoted_only_after_verification`;
 `tests/test_recurring_gate.py:test_scheduled_rebuild_requires_package_drift`
 executes the probe against fake `docker` output;
+`tests/test_recurring_gate.py:test_upstream_updates_are_scheduled_and_gated`
+controls the merge boundary, publish dispatch, and mutual watchdog links, and
+`tests/test_recurring_gate.py:test_upstream_deps_resolves_and_rewrites_only_the_pins`
+controls bounded resolution and the five-line rewrite, and
+`tests/test_recurring_gate.py:test_schedule_checker_fails_closed` exercises a
+disabled, stale, and future-dated workflow, and
+`tests/test_action_pin_update.py:ActionPinUpdateTest` removes
+the API-diff validator and the Dependabot matrix exemption;
 the deploy verifier carries its own control that deletes the digest comparison. The
 port invariant is controlled inside
 `tests/test_recurring_gate.py:test_listen_port_is_unprivileged_and_matches_fly`,
