@@ -250,6 +250,8 @@ def assert_target_mode_is_actionable(
     case.assertIn("names no run", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("The command has to still run", found["Report order"])
     case.assertIn("is marked `absent:`", found["Report order"])
+    case.assertIn("every bullet names a\nfile", found["Report order"])
+    case.assertIn("names no file", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("appears {len(matching)} times", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
 
     # The rejection list is the thing that voids a round; a subset is not one.
@@ -1372,10 +1374,12 @@ class RecurringContractTest(unittest.TestCase):
             "touches its authority",
             run_matrix(unverified_many, document, touched=[touched]).stderr,
         )
-        # A file nobody names as authority excuses nothing.
-        self.assertEqual(
-            run_matrix(unverified_many, document, touched=["README.md"]).returncode, 0
-        )
+        # A file nobody names as authority excuses nothing. The only remaining
+        # complaint is the change list, which in this fixture is a bare "x" and
+        # therefore names no touched file.
+        unrelated = run_matrix(unverified_many, document, touched=["README.md"])
+        self.assertIn("does not name the touched file README.md", unrelated.stderr)
+        self.assertNotIn("touches its authority", unrelated.stderr)
         # `--touched` with no path is a mistake, not "nothing touched".
         self.assertEqual(
             run_matrix(good, document, touched=[]).returncode, 2
@@ -1779,6 +1783,25 @@ class RecurringContractTest(unittest.TestCase):
             ).returncode,
             0,
         )
+        # `## Changes` is the list a reviewer maps onto the diff. "x" and "made
+        # things better" named nothing, and a bullet for a file outside the PR
+        # read the same as one of its changes.
+        self.assertIn(
+            "`## Changes` line 3 names no file",
+            run_matrix(good.replace("## Changes\n\nx", "## Changes\n\n- made things better", 1), document).stderr,
+        )
+        self.assertIn(
+            "names missing file scripts/gone.py",
+            run_matrix(good.replace("## Changes\n\nx", "## Changes\n\n- `scripts/gone.py`: added", 1), document).stderr,
+        )
+        # With `--touched` every changed file has to be named, or a change can
+        # land with no bullet and the list reads complete.
+        partial = good.replace("## Changes\n\nx", "## Changes\n\n- `scripts/pr_matrix.py`: added", 1)
+        self.assertIn(
+            "does not name the touched file docs/target_mode.md",
+            run_matrix(partial, document, ["docs/target_mode.md"]).stderr,
+        )
+        self.assertEqual(run_matrix(partial, document, ["scripts/pr_matrix.py"]).returncode, 0)
 
         # History names a `git log` command. Until now the command was never
         # run: any reachable hash passed, related to the class or not. The

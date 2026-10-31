@@ -313,7 +313,34 @@ def reference_issues(line: str) -> list[str]:
     return sorted(set(problems))
 
 
-def report_problems(body: str) -> list[str]:
+def changes_problems(content: str, touched: list[str] | None) -> list[str]:
+    """Every change bullet names a file that exists, and the diff is covered.
+
+    `## Changes` is the list a reviewer maps onto the diff, so "made things
+    better" and a bullet for a file that is not in the PR both cost the reader
+    the same work. Each bullet carries a repository path; with `--touched`,
+    every changed file also has to be named somewhere in the section.
+    """
+    text = unfenced(content)
+    problems: list[str] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.lstrip().startswith(("- ", "* ")):
+            continue
+        paths = PATHLIKE.findall(URL.sub(" ", line))
+        if not paths:
+            problems.append(f"`## Changes` line {number} names no file: {line.strip()!r}")
+        for path in paths:
+            if not Path(path.rstrip(".,;")).exists():
+                problems.append(f"`## Changes` line {number} names missing file {path.rstrip('.,;')}")
+    if touched:
+        named = " ".join(PATHLIKE.findall(text))
+        for path in touched:
+            if path not in named:
+                problems.append(f"`## Changes` does not name the touched file {path}")
+    return problems
+
+
+def report_problems(body: str, touched: list[str] | None = None) -> list[str]:
     """The report sections, in order, each present once and carrying content.
 
     A section heading is a promise to write something under it. Heading-only
@@ -338,6 +365,8 @@ def report_problems(body: str) -> list[str]:
                 problems.append(f"`## {head}` is empty")
             elif name == "Verification":
                 problems.extend(verification_problems(content))
+            elif name == "Changes":
+                problems.extend(changes_problems(content, touched))
     # One entry per section: a duplicate is already named above, and counting it
     # again here would report the same heading twice as an order problem too.
     ordered = list(
@@ -511,7 +540,7 @@ def check(
     owned = authorities(document)
     controlled = controls(document)
     problems: list[str] = []
-    problems.extend(report_problems(body))
+    problems.extend(report_problems(body, touched))
     rows = matrix_rows(body)
 
     header = cells(rows[0])
