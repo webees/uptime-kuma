@@ -63,6 +63,16 @@ def search(history: str) -> tuple[str, str] | None:
     needle = found.group(2).strip().strip("'\"").strip()
     return found.group(1), needle
 RUNNABLE = re.compile(r"`[^`]+`|\btests?/[^\s:]+:")
+# A span is only a run if something in it can be typed: a `path:symbol`, a file
+# name, an argument list or a command word. Backticks were the whole test
+# before, so `` `yes` ``, `` `n/a` `` and `` `ok` `` passed every column while
+# naming nothing and proving nothing.
+COMMAND = re.compile(
+    r"[.:]|\s|\d|^(git|python3|python3\.13|python|docker|bash|sh|curl|gh|flyctl|restic|jq|wget|make)\b"
+)
+# An observation is output, and output carries a number or a verdict a run
+# printed; a bare `ok` is a mood, not a line anyone can compare.
+OUTPUT = re.compile(r"\d|\b(OK|passed|failed|refused|denied|in sync|RULE DRIFT|matches)\b")
 # A control is only runnable if the file it names still exists; a `path:symbol`
 # is the protocol's spelling, so both halves are checked.
 # The symbol may start with `@`: Caddy's named matchers are spelled that way,
@@ -282,12 +292,26 @@ def reference_problems(title: str, column: str, text: str) -> list[str]:
 NON_RUNNABLE = {"config/Caddyfile"}
 
 
-def runnable_problems(title: str, column: str, text: str) -> list[str]:
-    """A control must name a run, not a directive that merely exists."""
-    problems = reference_problems(title, column, text)
-    if any(Path(path) in NON_RUNNABLE or path in NON_RUNNABLE for path, _ in REFERENCE.findall(text)):
+def run_problems(title: str, column: str, text: str) -> list[str]:
+    """Everything wrong with a cell that is supposed to name a run.
+
+    A span has to name something typeable, the named file and symbol have to
+    still exist, and a gesture at a directive file has to become the test that
+    drives it.
+    """
+    if not text:
+        return []
+    if not RUNNABLE.search(text):
+        return [f"{title!r} {column} names nothing runnable: {text!r}"]
+    problems: list[str] = []
+    for span in SPAN.findall(text):
+        if not COMMAND.search(span):
+            problems.append(f"{title!r} {column} names no command: {span!r}")
+    problems.extend(reference_problems(title, column, text))
+    directives = sorted({path for path, _ in REFERENCE.findall(text) if path in NON_RUNNABLE})
+    if directives:
         problems.append(
-            f"{title!r} {column} is a bare directive on {sorted({p for p, _ in REFERENCE.findall(text) if p in NON_RUNNABLE})}; "
+            f"{title!r} {column} is a bare directive on {directives}; "
             f"name the test that runs it"
         )
     return problems
@@ -367,27 +391,12 @@ def check(
                     f"reachable from HEAD, so only the clone that still holds it "
                     f"can show it; a squash merge drops the branch commit this way"
                 )
-        if control and not RUNNABLE.search(control):
-            problems.append(
-                f"line {number}: {title!r} Mutation control names nothing "
-                f"runnable: {control!r}"
-            )
-        # The control has to be runnable: a named file that is gone is a
-        # command nobody can type.
-        for problem in runnable_problems(title, "Mutation control", control):
-            problems.append(f"line {number}: {problem}")
-        # The three evidence columns must name a run, not describe one.
-        for column in EVIDENCE:
-            text = found[COLUMNS.index(column)]
-            if not text:
-                continue
-            if not RUNNABLE.search(text):
-                problems.append(
-                    f"line {number}: {title!r} {column} names nothing "
-                    f"runnable: {text!r}"
-                )
-                continue
-            for problem in reference_problems(title, column, text):
+        # The control and the three evidence columns must name a run, not
+        # describe one, and whatever they name has to still be there.
+        for column in ("Mutation control", *EVIDENCE):
+            for problem in run_problems(
+                title, column, found[COLUMNS.index(column)]
+            ):
                 problems.append(f"line {number}: {problem}")
         guard = found[COLUMNS.index("Authoritative guard")]
         if guard:
@@ -401,6 +410,11 @@ def check(
             problems.append(
                 f"line {number}: {title!r} Observed result quotes nothing; "
                 f"a word is not output"
+            )
+        elif found[-1] and not UNVERIFIED.match(found[-1]) and not OUTPUT.search(found[-1]):
+            problems.append(
+                f"line {number}: {title!r} Observed result quotes no output: "
+                f"{found[-1]!r} carries no result"
             )
         if touched and found[-1] and UNVERIFIED.match(found[-1]):
             hit = sorted(paths(owned.get(title, [])) & set(touched))

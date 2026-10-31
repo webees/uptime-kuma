@@ -116,7 +116,9 @@ One row per class, always these eight columns, in this order:
   run, and the row is only filled once that ran. A backticked `path:symbol`
   must still resolve here too: "ran", "yes" and "ok" describe a run without
   letting a reader repeat it, and a test that was since deleted repeats nothing.
-  `validate` rejects a cell that names no run at all.
+  `validate` rejects a cell that names no run at all, and a span whose content
+  is only a word: backticks are not evidence, so `` `yes` `` fails where
+  `` `python3.13 -m unittest x` `` passes.
 - `Mutation control` names the runnable test or command in backticks and states
   what changed when the guard was removed. "5 controls" is a count, not a
   location; a control that stays green proves nothing. A backticked
@@ -126,7 +128,8 @@ One row per class, always these eight columns, in this order:
   them.
 - `Observed result` quotes the actual output. Anything not run says `未验证`
   with the reason; anything else is a claim and must quote, so `ok` alone does
-  not pass.
+  not pass — and a quoted `ok` does not either, because a quote with no number
+  or verdict in it is still a mood.
 
 The matrix goes into the PR body and the final report. It is a review artifact,
 not a score, and it never becomes a per-round file.
