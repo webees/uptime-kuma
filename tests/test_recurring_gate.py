@@ -1837,6 +1837,26 @@ class RecurringContractTest(unittest.TestCase):
             "names no trigger",
             broken(good.replace("None opened; the recorded ones live in `README.md`.", vague_residual, 1)),
         )
+        # The field can be present and empty: `Trigger:` alone reads like it was
+        # filled and says nothing.
+        empty_trigger = (
+            "- the deploy might fail\n  Trigger:\n"
+            "  Observed by: `gh run list --branch main`."
+        )
+        self.assertIn(
+            "names an empty trigger",
+            broken(good.replace("None opened; the recorded ones live in `README.md`.", empty_trigger, 1)),
+        )
+        # Content on the following line belongs to the field, so a wrapped
+        # trigger keeps passing.
+        wrapped = (
+            "- the deploy might fail\n  Trigger:\n  a hand deploy.\n"
+            "  Observed by: `gh run list --branch main`."
+        )
+        self.assertEqual(
+            run_matrix(good.replace("None opened; the recorded ones live in `README.md`.", wrapped, 1), document).returncode,
+            0,
+        )
         trigger_only = "- the deploy might fail\n  Trigger: a hand deploy.\n  Observed by: somebody."
         self.assertIn(
             "observation names no command",
@@ -2293,6 +2313,23 @@ class RecurringContractTest(unittest.TestCase):
                 ).returncode,
                 0,
             )
+
+        # Mutation control 11: the empty-trigger read. A bare `Trigger:` has
+        # the field and no content, and passed before this check.
+        self.assertEqual(
+            run_mutated_matrix(
+                good.replace(
+                    "None opened; the recorded ones live in `README.md`.",
+                    "- the deploy might fail\n  Trigger:\n"
+                    "  Observed by: `gh run list --branch main`.",
+                    1,
+                ),
+                document,
+                [('            if not " ".join(rest).strip():',
+                  '            if False and not " ".join(rest).strip():')],
+            ).returncode,
+            0,
+        )
 
         # Mutation control 8: the conclusion read. Without it `x` and any bare
         # sentence pass, and a ghost path in the conclusion is not resolved.
