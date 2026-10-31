@@ -47,6 +47,12 @@ REPORT = ("Conclusion", "Matrix", "Changes", "Verification", "Residual")
 # A fence line: ```` ``` ```` or `~~~`, indented by at most three spaces.
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 SPAN = re.compile(r"`([^`]+)`")
+# A list item, in the four shapes Markdown renders as a bullet: `-`, `*`, `+`
+# and an ordered `1.` / `1)`. The rules below are written per *bullet*, and
+# reading only the two that GitHub's own template uses let a numbered list
+# through unchecked — `1. all green` passed `## Verification`, and a `+`
+# bullet carried no file while the section still read complete.
+BULLET = re.compile(r"[-*+] |\d{1,9}[.)] ")
 # `History` and `Mutation control` are prose columns a row can satisfy with a
 # word. History must carry its classification *and* the commit that supports
 # it; a control must name something runnable, not assert one exists.
@@ -286,7 +292,7 @@ def verification_problems(content: str) -> list[str]:
     if not any(names_run(line) for line in text.splitlines()):
         problems.append("`## Verification` names no run")
     for number, line in enumerate(text.splitlines(), start=1):
-        if line.lstrip().startswith(("- ", "* ")) and not names_run(line):
+        if BULLET.match(line.lstrip()) and not names_run(line):
             problems.append(f"`## Verification` line {number} names no run: {line.strip()!r}")
         for issue in reference_issues(line, tolerate_missing=bool(ABSENT.search(line))):
             problems.append(f"`## Verification` line {number}: {issue}")
@@ -386,7 +392,7 @@ def residual_problems(content: str) -> list[str]:
     # A bullet owns its continuation lines, which is where the two fields sit.
     blocks: list[list[str]] = []
     for line in text.splitlines():
-        if line.lstrip().startswith(("- ", "* ")):
+        if BULLET.match(line.lstrip()):
             blocks.append([line])
         elif blocks and line.strip():
             blocks[-1].append(line)
@@ -469,7 +475,7 @@ def changes_problems(content: str, touched: list[str] | None) -> list[str]:
         return found
 
     for number, line in enumerate(text.splitlines(), start=1):
-        if not line.lstrip().startswith(("- ", "* ")):
+        if not BULLET.match(line.lstrip()):
             continue
         paths = named_paths(line)
         if not paths:
@@ -493,7 +499,7 @@ def changes_problems(content: str, touched: list[str] | None) -> list[str]:
             if path not in named and not any(path.startswith(tree) for tree in trees):
                 problems.append(f"`## Changes` does not name the touched file {path}")
         for number, line in enumerate(text.splitlines(), start=1):
-            if not line.lstrip().startswith(("- ", "* ")):
+            if not BULLET.match(line.lstrip()):
                 continue
             for path, directory in named_paths(line):
                 inside = directory and any(item.startswith(path) for item in touched)
