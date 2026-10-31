@@ -119,6 +119,8 @@ One row per class, always these eight columns, in this order:
   `validate` rejects a cell that names no run at all, and a span whose content
   is only a word: backticks are not evidence, so `` `yes` `` fails where
   `` `python3.13 -m unittest x` `` passes.
+  The backticks are not evidence either way: an empty span `` ` ` `` has the
+  shape of a citation and no content, so it is reported like a bare word.
 - `Mutation control` names the runnable test or command in backticks and states
   what changed when the guard was removed. "5 controls" is a count, not a
   location; a control that stays green proves nothing. A backticked

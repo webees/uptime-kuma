@@ -69,7 +69,9 @@ def search(history: str) -> tuple[str, str] | None:
         return None
     needle = found.group(2).strip().strip("'\"").strip()
     return found.group(1), needle
-RUNNABLE = re.compile(r"`[^`]+`|\btests?/[^\s:]+:")
+# The span has to hold a non-blank character: matching the backticks alone let
+# `` ` ` `` pass an evidence column without naming anything.
+RUNNABLE = re.compile(r"`[^`]*\S[^`]*`|\btests?/[^\s:]+:")
 # A span is only a run if something in it can be typed: a `path:symbol`, a file
 # name, an argument list or a command word. Backticks were the whole test
 # before, so `` `yes` ``, `` `n/a` `` and `` `ok` `` passed every column while
