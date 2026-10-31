@@ -96,6 +96,10 @@ ABSENT = re.compile(r"\babsent:", re.IGNORECASE)
 PATHLIKE = re.compile(
     r"(?<![\w./:-])((?:[\w.-]+/)+[\w.-]+|[\w-]+\.(?:py|sh|ya?ml|json|md|txt|toml))"
 )
+# A bullet may name a directory when the change spans it: `docs/` ends in the
+# separator the file pattern requires an entry after, so it matched nothing and
+# a whole-tree change was reported as "names no file".
+DIRECTORY = re.compile(r"(?<![\w./:-])((?:[\w.-]+/)+)(?![^\s`])")
 # A control is only runnable if the file it names still exists; a `path:symbol`
 # is the protocol's spelling, so both halves are checked.
 # The symbol may start with `@`: Caddy's named matchers are spelled that way,
@@ -420,29 +424,53 @@ def changes_problems(content: str, touched: list[str] | None) -> list[str]:
     better" and a bullet for a file that is not in the PR both cost the reader
     the same work. Each bullet carries a repository path; with `--touched`,
     every changed file also has to be named somewhere in the section.
+
+    A directory with a trailing slash is a path too: a rule changed across a
+    tree is one bullet, and it covers the files under it. Before this it matched
+    no file at all, so the bullet read as "made things better" and every file
+    under it counted as unnamed.
     """
     text = unfenced(content)
     problems: list[str] = []
+
+    def named_paths(line: str) -> list[tuple[str, bool]]:
+        """`(path, is_directory)` pairs on one line, in reading order."""
+        bare = URL.sub(" ", line)
+        trees = DIRECTORY.findall(bare)
+        # `docs/gone/` also satisfies the file pattern as `docs/gone`; the
+        # directory is the reading the slash asks for, so it is not counted
+        # twice and the message names one thing.
+        found = [
+            (path.rstrip(".,;"), False)
+            for path in PATHLIKE.findall(bare)
+            if f"{path.rstrip('.,;')}/" not in trees
+        ]
+        found.extend((path, True) for path in trees)
+        return found
+
     for number, line in enumerate(text.splitlines(), start=1):
         if not line.lstrip().startswith(("- ", "* ")):
             continue
-        paths = PATHLIKE.findall(URL.sub(" ", line))
+        paths = named_paths(line)
         if not paths:
             problems.append(f"`## Changes` line {number} names no file: {line.strip()!r}")
-        for path in paths:
-            if not Path(path.rstrip(".,;")).exists():
-                problems.append(f"`## Changes` line {number} names missing file {path.rstrip('.,;')}")
+        for path, directory in paths:
+            if directory and not Path(path).is_dir():
+                problems.append(f"`## Changes` line {number} names missing directory {path}")
+            elif not directory and not Path(path).exists():
+                problems.append(f"`## Changes` line {number} names missing file {path}")
     if touched:
-        named = " ".join(PATHLIKE.findall(text))
+        named = [path for line in text.splitlines() for path, _ in named_paths(line)]
+        trees = [path for line in text.splitlines() for path, directory in named_paths(line) if directory]
         for path in touched:
-            if path not in named:
+            if path not in named and not any(path.startswith(tree) for tree in trees):
                 problems.append(f"`## Changes` does not name the touched file {path}")
         for number, line in enumerate(text.splitlines(), start=1):
             if not line.lstrip().startswith(("- ", "* ")):
                 continue
-            for path in PATHLIKE.findall(URL.sub(" ", line)):
-                path = path.rstrip(".,;")
-                if Path(path).exists() and path not in touched:
+            for path, directory in named_paths(line):
+                inside = directory and any(item.startswith(path) for item in touched)
+                if Path(path).exists() and path not in touched and not inside:
                     problems.append(f"`## Changes` line {number} names a file the PR did not change: {path}")
     return problems
 
