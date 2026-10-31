@@ -159,6 +159,11 @@ five left with no content. A heading is a promise to write under it: the empty
 `## Verification` is what the template leaves behind, and an empty conclusion or
 residual is the same shape one section over.
 
+The heading word is matched without regard to case, because GitHub renders
+`## verification` exactly like `## Verification`; the checker has to read what
+the reader sees. The same heading twice is still two sections, even when the two
+copies differ in case.
+
 A heading inside a fence is a quotation, not a section. The examples a body
 pastes in — a skeleton to fix, a table to restore — are ignored, so the sections
 and the table rows are the ones outside code blocks.

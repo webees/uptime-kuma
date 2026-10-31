@@ -240,18 +240,34 @@ def report_sections(body: str) -> list[tuple[str, str]]:
     ]
 
 
+def matches(head: str, name: str) -> bool:
+    """Whether a heading is the protocol section `name`.
+
+    GitHub renders `## verification` and `## Verification` alike, so the check
+    has to as well. A qualifier after the word (`## Residual risk`) still
+    belongs to that section; it is not a second name.
+    """
+    head = head.lower()
+    return head == name.lower() or head.startswith(f"{name.lower()} ")
+
+
 def matrix_rows(body: str) -> list[str]:
-    """The table lines of `## Matrix`, ignoring a table quoted in a fence."""
-    for head, content in report_sections(body):
-        if head != "Matrix":
-            continue
+    """The table lines of `## Matrix`, ignoring a table quoted in a fence.
+
+    A duplicated heading is already reported by the section check, so the
+    first copy that actually carries a table is read rather than aborting on an
+    empty one and losing the per-row messages with it.
+    """
+    heads = [content for head, content in report_sections(body) if matches(head, "Matrix")]
+    if not heads:
+        raise Unreadable("the body has no `## Matrix` section")
+    for content in heads:
         rows = [
             line for line in unfenced(content).split("\n") if line.strip().startswith("|")
         ]
-        if len(rows) < 2:
-            raise Unreadable("the matrix has no header")
-        return rows
-    raise Unreadable("the body has no `## Matrix` section")
+        if len(rows) >= 2:
+            return rows
+    raise Unreadable("the matrix has no header")
 
 
 def verification_problems(content: str) -> list[str]:
@@ -493,7 +509,7 @@ def report_problems(body: str, touched: list[str] | None = None) -> list[str]:
     if opening and body[: opening.start()].strip():
         problems.append("the body opens with a preamble before `## Conclusion`")
     for name in REPORT:
-        matching = [head for head, _ in placed if head == name or head.startswith(f"{name} ")]
+        matching = [head for head, _ in placed if matches(head, name)]
         if not matching:
             if name == "Residual":
                 problems.append("the body has no residual section")
@@ -515,12 +531,16 @@ def report_problems(body: str, touched: list[str] | None = None) -> list[str]:
                 problems.extend(residual_problems(content))
     # One entry per section: a duplicate is already named above, and counting it
     # again here would report the same heading twice as an order problem too.
+    # Folded to the protocol's spelling: a duplicate written in another case
+    # would otherwise enter the walk twice and read as an order problem.
     ordered = list(
         dict.fromkeys(
-            head for head, _ in placed if head in REPORT or head.startswith("Residual")
+            next(name for name in REPORT if matches(head, name))
+            for head, _ in placed
+            if any(matches(head, name) for name in REPORT)
         )
     )
-    rank = lambda head: REPORT.index(head.split()[0])
+    rank = REPORT.index
     if ordered != sorted(ordered, key=rank):
         problems.append(
             f"the report order is {', '.join(REPORT)}, got {', '.join(ordered)}"
