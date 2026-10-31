@@ -1639,6 +1639,17 @@ class RecurringContractTest(unittest.TestCase):
             "the report order is",
             run_matrix(swap_sections(good, "Matrix", "Changes"), document).stderr,
         )
+        # "No preamble" is the first sentence of the protocol and the one part
+        # of the order nothing read: text above `## Conclusion` still parses,
+        # so a body can open with an abstract the conclusion merely repeats.
+        # A blank line is not a preamble; a paragraph is.
+        self.assertEqual(
+            run_matrix("\n\n" + good, document).returncode, 0
+        )
+        self.assertIn(
+            "the body opens with a preamble before `## Conclusion`",
+            broken("Summary of the round.\n\n" + good),
+        )
         # A section heading with nothing under it is the shape a rushed body
         # leaves after the template. `## Verification` was the only one checked
         # at first, so an empty conclusion, change list and residual all passed
@@ -2113,6 +2124,23 @@ class RecurringContractTest(unittest.TestCase):
 
         # Mutation control 5: no matrix section at all.
         self.assertIn("no `## Matrix`", run_matrix("## Changes\n", document).stderr)
+
+        # Mutation control 6: the preamble read is the guard the new rule
+        # rests on, so dropping it has to make the abstract pass again.
+        with_preamble = "Summary of the round.\n\n" + good
+        self.assertIn(
+            "opens with a preamble",
+            run_matrix(with_preamble, document).stderr,
+        )
+        self.assertEqual(
+            run_mutated_matrix(
+                with_preamble,
+                document,
+                [('    if opening and body[: opening.start()].strip():',
+                  '    if False and opening and body[: opening.start()].strip():')],
+            ).returncode,
+            0,
+        )
 
         # A body that opens with the matrix is legal and must still be checked.
         # The section is found even without a leading newline, so the only
