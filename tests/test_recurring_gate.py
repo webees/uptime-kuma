@@ -2241,6 +2241,28 @@ class RecurringContractTest(unittest.TestCase):
             0,
         )
 
+        # Rows are printed in registry order by `round_open.py`, and a reader
+        # walks the matrix in that order to compare it with the classes. Two
+        # swapped rows passed: every cell was present and every class was named
+        # somewhere, so nothing noticed the walk was now a lookup.
+        titles = target_classes(document)
+        lines = good.splitlines()
+        first = next(number for number, line in enumerate(lines) if line.startswith(f"| {titles[0]} "))
+        lines[first], lines[first + 1] = lines[first + 1], lines[first]
+        self.assertIn(
+            "the rows are not in registry order",
+            broken("\n".join(lines) + "\n"),
+        )
+        self.assertEqual(
+            run_mutated_matrix(
+                "\n".join(lines) + "\n",
+                document,
+                [("    if seen != [title for title in expected if title in seen]:",
+                  "    if False and seen != [title for title in expected if title in seen]:")],
+            ).returncode,
+            0,
+        )
+
         # Mutation control 7: the residual fields. Without the read a bare
         # `None.` and an unfalsifiable bullet both pass again.
         self.assertIn(

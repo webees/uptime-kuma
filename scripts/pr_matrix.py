@@ -718,6 +718,8 @@ def check(
     for title in expected:
         if title not in seen:
             problems.append(f"missing class {title!r}")
+    if seen != [title for title in expected if title in seen]:
+        problems.append("the rows are not in registry order")
     if len(seen) < minimum_rows:
         problems.append(f"only {len(seen)} row(s) filled")
     return problems
