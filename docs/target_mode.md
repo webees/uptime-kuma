@@ -171,6 +171,11 @@ same PR therefore has to have its verification lines moved with it.
 An example that is *meant* to be absent is marked `absent:` on its line, or the
 check reports the negative case it is demonstrating.
 
+`## Changes` is the list a reviewer maps onto the diff, so every bullet names a
+file and the file has to exist. With `--touched`, every changed file also has
+to appear somewhere in the section; "made things better" costs the reader the
+same work as a bullet for a file the PR never touched.
+
 ## Rejection criteria
 
 A round is void and starts over when any of these is true:
