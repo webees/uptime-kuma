@@ -211,6 +211,10 @@ The fields are checked for content, not presence: `Trigger:` with nothing after
 it reads like a filled field. A value may wrap onto the following lines; the
 field ends at the next `Observed by:`.
 
+`Observed by:` closes the same hole. Its content is checked for a command or a
+link like the rest of the section, so an empty field is reported before that
+check runs, and a wrapped value is joined rather than ignored.
+
 ## Rejection criteria
 
 A round is void and starts over when any of these is true:
