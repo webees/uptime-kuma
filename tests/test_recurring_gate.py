@@ -629,6 +629,7 @@ def assert_automation_health_is_independent(case: unittest.TestCase, health: str
     case.assertEqual(len(crons), 1, "one health-check slot is expected")
     case.assertIn("  workflow_run:\n", health)
     case.assertIn("    branches: [main]\n", health)
+    case.assertIn("      - 🤖 Dependabot Auto-Merge\n", health)
     case.assertIn("github.event.workflow_run.conclusion != 'skipped'", health)
     case.assertIn('if [ "$CONCLUSION" != success ]; then', health)
     case.assertIn("timeout 120 python3 scripts/check_schedules.py", health)

@@ -12,6 +12,7 @@ on:
   workflow_run:
     workflows:
       - ⬆️ Upstream Updates
+      - 🤖 Dependabot Auto-Merge
       - 🐳 Docker (Multi-Arch)
       - 🧭 Deploy Drift
       - 🧹 GHCR Cleanup

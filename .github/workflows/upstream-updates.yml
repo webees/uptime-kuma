@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       auto_merge:
-        description: "Merge a patch-level update after validate (schedule always does)"
+        description: "Merge a stable update after validate (schedule always does)"
         type: boolean
         default: false
 
