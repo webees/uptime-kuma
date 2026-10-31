@@ -758,6 +758,13 @@ def check(
                 f"line {number}: {title!r} History names no `git log` command, "
                 f"so nobody can tell which commits it looked at"
             )
+        # `git log -S` with nothing after the flag is not "everything": the
+        # next argument is consumed as the needle, which here is `--format=%h`.
+        if named and not named[1]:
+            problems.append(
+                f"line {number}: {title!r} History names an empty `git log` needle, "
+                f"so the command searches the next argument instead"
+            )
         # A hash is only evidence of *this* class if the named command reported
         # it; any reachable commit would otherwise read as history. The reported
         # form is abbreviated, so a hash spelled in full is the same commit and

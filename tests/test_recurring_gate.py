@@ -221,6 +221,8 @@ def assert_target_mode_is_actionable(
     # wider search than the row quotes.
     case.assertIn("The needle is taken whole — path separators", found["Matrix"])
     case.assertIn("compared by prefix rather than as text", found["Matrix"])
+    case.assertIn("The needle cannot be empty", found["Matrix"])
+    case.assertIn("History names an empty `git log` needle", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("short.startswith(sha) or sha.startswith(short)", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("deleted file or a deleted case", found["Matrix"])
     # The three evidence columns are prose the same way: a word describes a run
@@ -2135,6 +2137,29 @@ class RecurringContractTest(unittest.TestCase):
             "History names no `git log` command",
             broken(replace_row(good, "History", "unchanged → `dbf6c26`")),
         )
+        # `git log -S` with nothing after the flag is not "every commit": the
+        # next argument is eaten as the needle, so `--format=%h` becomes the
+        # search term and the row silently tests the wrong thing.
+        self.assertIn(
+            "names an empty `git log` needle",
+            broken(replace_row(good, "History", "unchanged, `git log -S` → `dbf6c26`")),
+        )
+        # Whitespace is the same shape: the flag still leaves nothing to search.
+        self.assertIn(
+            "names an empty `git log` needle",
+            broken(replace_row(good, "History", "unchanged, `git log -S ` → `dbf6c26`")),
+        )
+        # The control for that: no emptiness check. The membership lookup reads
+        # the same empty needle, so it is blanked as well; the empty needle is
+        # still what `git log` reports and the row passes on that.
+        without_needle = run_mutated_matrix(
+            replace_row(good, "History", "unchanged, `git log -S` → `dbf6c26`"),
+            document,
+            [("        if named and not named[1]:", "        if False and not named[1]:"),
+             ("            if named and not any(",
+              "            if False and not any(")],
+        )
+        self.assertEqual(without_needle.returncode, 0, without_needle.stderr)
 
         # The needle is a path more often than an identifier, and the reader
         # re-runs what is written. Reading only up to the first `/` runs
