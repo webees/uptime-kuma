@@ -217,6 +217,9 @@ def assert_target_mode_is_actionable(
     case.assertIn("The command is run, not read", found["Matrix"])
     case.assertIn("History names no `git log` command", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("in the output of `git log -", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    # A path needle is the common case; reading it up to the first `/` runs a
+    # wider search than the row quotes.
+    case.assertIn("The needle is taken whole — path separators", found["Matrix"])
     case.assertIn("deleted file or a deleted case", found["Matrix"])
     # The three evidence columns are prose the same way: a word describes a run
     # without letting anyone repeat it.
@@ -1508,6 +1511,41 @@ class RecurringContractTest(unittest.TestCase):
             broken(replace_row(good, "History", "unchanged → `dbf6c26`")),
         )
 
+        # The needle is a path more often than an identifier, and the reader
+        # re-runs what is written. Reading only up to the first `/` runs
+        # `-Sscripts` while the row claims `-Sscripts/entrypoint/config.sh`,
+        # so a hash the narrow search never reports passes: `1a9d3bb` changed
+        # the repository's scripts but not that file. The needle has to be
+        # taken whole.
+        path = "scripts/entrypoint/" + "config.sh"
+        produced_by_path = subprocess.run(
+            ["git", "log", f"-S{path}", "--format=%h"],
+            cwd=ROOT, capture_output=True, text=True, check=False,
+        ).stdout.split()
+        wide = subprocess.run(
+            ["git", "log", "-Sscripts", "--format=%h"],
+            cwd=ROOT, capture_output=True, text=True, check=False,
+        ).stdout.split()
+        self.assertTrue(produced_by_path)
+        outsider = next(sha[:7] for sha in wide if sha[:7] not in produced_by_path)
+        ghost = replace_row(
+            good, "History", f"unchanged, `git log -S{path}` → `{outsider}`"
+        )
+        self.assertIn("is not in the output of", broken(ghost))
+        # And the control: the same needle must accept a hash it did report,
+        # otherwise the check is `rc=1` for every path needle.
+        self.assertEqual(
+            run_matrix(
+                replace_row(
+                    good,
+                    "History",
+                    f"unchanged, `git log -S{path}` → `{produced_by_path[0][:7]}`",
+                ),
+                document,
+            ).returncode,
+            0,
+        )
+
         # Mutation controls, one per column: each check is what turns its
         # words back into evidence, so dropping it lets that row pass again.
         vague_history = replace_row(good, "History", "n/a")
@@ -1578,6 +1616,49 @@ class RecurringContractTest(unittest.TestCase):
             [("        if cited and not named:", "        if False and not named:")],
         )
         self.assertEqual(without_command.returncode, 0, without_command.stderr)
+
+        # A path is not the only needle a character class gets wrong: a phrase
+        # ends it at the first space and a regex anchor is dropped entirely.
+        # Each shape is re-run as a shorter search, so a hash only that shorter
+        # search reported passes — and the row quotes the longer one.
+        outsiders: dict[str, str] = {}
+        for needle, short in ((path, "scripts"), ("denied host", "denied"), ("health check", "health")):
+            # Quoted in the row, unquoted for git: a shell strips the quotes a
+            # reader types, while the checker has to strip them itself.
+            quoted = f"`git log -S'{needle}'`"
+            reported = subprocess.run(
+                ["git", "log", f"-S{needle}", "--format=%h"],
+                cwd=ROOT, capture_output=True, text=True, check=False,
+            ).stdout.split()
+            truncated = subprocess.run(
+                ["git", "log", f"-S{short}", "--format=%h"],
+                cwd=ROOT, capture_output=True, text=True, check=False,
+            ).stdout.split()
+            self.assertTrue(reported, needle)
+            outsider = next((sha[:7] for sha in truncated if sha[:7] not in reported), None)
+            self.assertIsNotNone(outsider, needle)
+            outsiders[needle] = outsider
+            self.assertIn(
+                "is not in the output of",
+                broken(replace_row(good, "History", f"unchanged, {quoted} → `{outsider}`")),
+            )
+            self.assertEqual(
+                run_matrix(
+                    replace_row(good, "History", f"unchanged, {quoted} → `{reported[0][:7]}`"),
+                    document,
+                ).returncode,
+                0,
+            )
+        # The regression itself: the old pattern stopped at the first `/` and
+        # at a quote, so `-Sscripts` is a much wider search than the row quotes.
+        without_truncation = run_mutated_matrix(
+            replace_row(good, "History", f"unchanged, `git log -S{path}` → `{outsiders[path]}`"),
+            document,
+            # The old shape: a character class that stops at `/` and space and
+            # drops a quoted needle's tail.
+            [(r"git log -(S|G)`?([^`\n→]*)", r"git log -(S|G)`?([\w@.-]+)")],
+        )
+        self.assertEqual(without_truncation.returncode, 0, without_truncation.stderr)
 
         without_case = run_mutated_matrix(
             replace_row(

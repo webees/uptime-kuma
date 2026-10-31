@@ -104,7 +104,10 @@ One row per class, always these eight columns, in this order:
   The command is run, not read: every cited hash has to be in its output (`-S`
   and `-G` are re-executed with the needle as written), and a History with no
   `git log` command is rejected, because any reachable commit otherwise counts
-  as history for any class.
+  as history for any class. The needle is taken whole — path separators,
+  quotes and spaces included — because re-running a truncated prefix searches
+  a wider set than the row claims, so a hash that search never reported would
+  read as its output.
 - `Authoritative guard` is one `path:symbol` pair and has to be one the class
   records under `Authority:`; `validate` rejects another path, a neighbour's
   symbol on a shared file, and a symbol that no longer occurs in that file. Two
