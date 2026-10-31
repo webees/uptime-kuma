@@ -210,7 +210,9 @@ non-empty is not enough. Each bullet states its `Trigger:` and an
 `Observed by:` line that names a command or a link; "the deploy might fail"
 alone leaves the reader unable to tell whether it has happened. A round that
 opened none says `none` and names `README.md`, which is where the list lives,
-so "None." cannot hide the registry's contents from a reader.
+so "None." cannot hide the registry's contents from a reader. The name is
+resolved, not just matched: `README2.md` or `docs/README.md` reads like the
+registry and opens nothing, so it is reported instead of counting as the claim.
 
 The fields are checked for content, not presence: `Trigger:` with nothing after
 it reads like a filled field. A value may wrap onto the following lines; the

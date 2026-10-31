@@ -355,8 +355,13 @@ def residual_problems(content: str) -> list[str]:
     # may open "none of the retries survive…" and still need its own fields.
     claims_none = re.search(r"(?m)^\s*none\b", text, re.IGNORECASE)
     if claims_none:
-        if "README.md" not in text:
+        # Naming the registry is a pointer, so it has to resolve. A literal
+        # substring test let `README2.md` and `docs/gone.md` through: the
+        # sentence still said `README.md` inside the wrong name.
+        named = {path.rstrip(".,;") for path in PATHLIKE.findall(URL.sub(" ", text))}
+        if "README.md" not in named:
             problems.append("`## Residual risk` does not name README.md, where they are kept")
+        problems.extend(reference_issues(text))
         return problems
     # A bullet owns its continuation lines, which is where the two fields sit.
     blocks: list[list[str]] = []
