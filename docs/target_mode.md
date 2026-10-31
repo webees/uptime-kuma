@@ -215,6 +215,10 @@ field ends at the next `Observed by:`.
 link like the rest of the section, so an empty field is reported before that
 check runs, and a wrapped value is joined rather than ignored.
 
+The `none` claim is the section's own, anchored at the start of a line. A
+bullet may open "none of the retries survive an outage" and still needs its
+fields; matching the word anywhere made the whole section read as closed.
+
 ## Rejection criteria
 
 A round is void and starts over when any of these is true:
