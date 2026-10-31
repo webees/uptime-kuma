@@ -253,6 +253,9 @@ def assert_target_mode_is_actionable(
     # The marker used to excuse the whole line, so a renamed case rode along.
     case.assertIn("The marker excuses only a\nmissing file", found["Report order"])
     case.assertIn("tolerate_missing", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    # And the `none` claim's registry path is resolved, not matched.
+    case.assertIn("The name is\nresolved, not just matched", found["Report order"])
+    case.assertIn("if \"README.md\" not in named:", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("every bullet names a\nfile", found["Report order"])
     case.assertIn("names no file", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("appears {len(matching)} times", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
@@ -1876,6 +1879,35 @@ class RecurringContractTest(unittest.TestCase):
             "does not name README.md",
             broken(good.replace("; the recorded ones live in `README.md`.", ".", 1)),
         )
+        # Naming it is not the same as it being there: `README2.md` and
+        # `docs/gone.md` both read like a pointer the reader can open.
+        self.assertIn(
+            "names missing file README2.md",
+            broken(
+                good.replace("; the recorded ones live in `README.md`.",
+                             "; the open ones live in `README2.md`.", 1)
+            ),
+        )
+        self.assertIn(
+            "names missing file docs/gone.md",
+            broken(
+                good.replace("; the recorded ones live in `README.md`.",
+                             "; the open ones live in `docs/gone.md`.", 1)
+            ),
+        )
+        # The control for that: a literal substring test, which is what the
+        # claim did before, keeps a ghost path green as long as the letters
+        # README.md still occur in it — `docs/README.md` is not there.
+        ghost_none = "None opened; the recorded ones live in `docs/README.md`."
+        without_resolution = run_mutated_matrix(
+            good.replace("None opened; the recorded ones live in `README.md`.", ghost_none, 1),
+            document,
+            [("        if \"README.md\" not in named:",
+              "        if \"README.md\" not in text:"),
+             ("        problems.extend(reference_issues(text))\n        return problems",
+              "        return problems")],
+        )
+        self.assertEqual(without_resolution.returncode, 0, without_resolution.stderr)
         vague_residual = "- the deploy might fail"
         self.assertIn(
             "names no trigger",
