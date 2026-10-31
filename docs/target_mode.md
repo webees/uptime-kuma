@@ -107,7 +107,8 @@ One row per class, always these eight columns, in this order:
   as history for any class. The needle is taken whole — path separators,
   quotes and spaces included — because re-running a truncated prefix searches
   a wider set than the row claims, so a hash that search never reported would
-  read as its output.
+  read as its output. A hash may be spelled in full or abbreviated; the report
+  prints the short form, so the two are compared by prefix rather than as text.
 - `Authoritative guard` is one `path:symbol` pair and has to be one the class
   records under `Authority:`; `validate` rejects another path, a neighbour's
   symbol on a shared file, and a symbol that no longer occurs in that file. Two

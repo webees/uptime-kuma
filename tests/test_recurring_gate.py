@@ -220,6 +220,8 @@ def assert_target_mode_is_actionable(
     # A path needle is the common case; reading it up to the first `/` runs a
     # wider search than the row quotes.
     case.assertIn("The needle is taken whole — path separators", found["Matrix"])
+    case.assertIn("compared by prefix rather than as text", found["Matrix"])
+    case.assertIn("short.startswith(sha) or sha.startswith(short)", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("deleted file or a deleted case", found["Matrix"])
     # The three evidence columns are prose the same way: a word describes a run
     # without letting anyone repeat it.
@@ -2155,6 +2157,25 @@ class RecurringContractTest(unittest.TestCase):
             good, "History", f"unchanged, `git log -S{path}` → `{outsider}`"
         )
         self.assertIn("is not in the output of", broken(ghost))
+        # A hash spelled in full is the same commit as the abbreviated one
+        # `git log` prints. Compared literally it never matched, so a History
+        # that copied `git rev-parse` output was rejected for every class.
+        self.assertEqual(
+            run_matrix(
+                replace_row(
+                    good,
+                    "History",
+                    "unchanged, `git log -Gheader_up` → `"
+                    + subprocess.run(
+                        ["git", "rev-parse", "fd86130"],
+                        cwd=ROOT, capture_output=True, text=True, check=True,
+                    ).stdout.strip()
+                    + "`",
+                ),
+                document,
+            ).returncode,
+            0,
+        )
         # And the control: the same needle must accept a hash it did report,
         # otherwise the check is `rc=1` for every path needle.
         self.assertEqual(
@@ -2199,8 +2220,8 @@ class RecurringContractTest(unittest.TestCase):
             # A freshly built commit is in no log output either, so the
             # membership check is blanked alongside the reachability probe.
             [("        stale = set(unreachable(alive))", "        stale = set()"),
-             ("            if named and sha not in produced:",
-              "            if False and named and sha not in produced:")],
+             ("            if named and not any(",
+              "            if False and not any(")],
         )
         self.assertEqual(without_reach.returncode, 0, without_reach.stderr)
 
@@ -2238,8 +2259,8 @@ class RecurringContractTest(unittest.TestCase):
         without_produced = run_mutated_matrix(
             replace_row(good, "History", f"unchanged, `git log -S{needle}` → `{unrelated}`"),
             document,
-            [("            if named and sha not in produced:",
-              "            if False and named and sha not in produced:")],
+            [("            if named and not any(",
+              "            if False and not any(")],
         )
         self.assertEqual(without_produced.returncode, 0, without_produced.stderr)
 
