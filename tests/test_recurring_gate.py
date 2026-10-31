@@ -262,6 +262,8 @@ def assert_target_mode_is_actionable(
     # A trailing slash is a directory, and the protocol has to say it covers
     # the tree instead of reading as an unknown path.
     case.assertIn("A bullet may name a directory with a trailing slash", found["Report order"])
+    case.assertIn("One path gets one bullet", found["Report order"])
+    case.assertIn("first_seen", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("DIRECTORY = re.compile", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("names no file", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("appears {len(matching)} times", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
@@ -2065,6 +2067,40 @@ class RecurringContractTest(unittest.TestCase):
                 ["scripts/pr_matrix.py"],
             ).stderr,
         )
+        # The same path twice reads as two changes; a reader walks the diff for
+        # a second one that is not there.
+        twice = good.replace(
+            "## Changes\n\nx",
+            "## Changes\n\n- `scripts/pr_matrix.py`: added\n- `scripts/pr_matrix.py`: tightened",
+            1,
+        )
+        self.assertIn(
+            "line 4 names scripts/pr_matrix.py again, already on line 3",
+            run_matrix(twice, document, ["scripts/pr_matrix.py"]).stderr,
+        )
+        # Twice on one line is one bullet and stays legal.
+        self.assertEqual(
+            run_matrix(
+                good.replace(
+                    "## Changes\n\nx",
+                    "## Changes\n\n- `scripts/pr_matrix.py` and `scripts/pr_matrix.py`: added",
+                    1,
+                ),
+                document,
+                ["scripts/pr_matrix.py"],
+            ).returncode,
+            0,
+        )
+        # The control for that: no ledger, which is what the section had, lets
+        # the second bullet ride through.
+        without_ledger = run_mutated_matrix(
+            twice,
+            document,
+            [("            if (path, directory) in first_seen:",
+              "            if False and (path, directory) in first_seen:")],
+            ["scripts/pr_matrix.py"],
+        )
+        self.assertEqual(without_ledger.returncode, 0, without_ledger.stderr)
 
         # History names a `git log` command. Until now the command was never
         # run: any reachable hash passed, related to the class or not. The

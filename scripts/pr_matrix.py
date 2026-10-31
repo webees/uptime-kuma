@@ -445,9 +445,13 @@ def changes_problems(content: str, touched: list[str] | None) -> list[str]:
     tree is one bullet, and it covers the files under it. Before this it matched
     no file at all, so the bullet read as "made things better" and every file
     under it counted as unnamed.
+
+    A path named twice is reported once more: two bullets for one file read as
+    two changes, and a reader walks the diff twice to find one.
     """
     text = unfenced(content)
     problems: list[str] = []
+    first_seen: dict[tuple[str, bool], int] = {}
 
     def named_paths(line: str) -> list[tuple[str, bool]]:
         """`(path, is_directory)` pairs on one line, in reading order."""
@@ -470,7 +474,14 @@ def changes_problems(content: str, touched: list[str] | None) -> list[str]:
         paths = named_paths(line)
         if not paths:
             problems.append(f"`## Changes` line {number} names no file: {line.strip()!r}")
-        for path, directory in paths:
+        for path, directory in dict.fromkeys(paths):
+            if (path, directory) in first_seen:
+                problems.append(
+                    f"`## Changes` line {number} names {path} again, already on "
+                    f"line {first_seen[(path, directory)]}"
+                )
+            else:
+                first_seen[(path, directory)] = number
             if directory and not Path(path).is_dir():
                 problems.append(f"`## Changes` line {number} names missing directory {path}")
             elif not directory and not Path(path).exists():

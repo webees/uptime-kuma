@@ -203,6 +203,10 @@ a rule across that tree rather than one file. The directory has to exist, it
 covers every changed file under it, and a file outside the diff is still
 reported: `docs/` is one bullet only because the change really is one.
 
+One path gets one bullet. The same file named twice reads as two changes, so a
+reviewer walks the diff for a second one and finds the same hunk; naming it
+twice inside a single bullet is still one entry.
+
 The mapping runs the other way too: with `--touched`, a bullet naming a file the
 pull request did not change is reported. Such a bullet reads as a change the
 reviewer looks for in the diff and never finds, which is the same cost as an
