@@ -182,6 +182,13 @@ that a reader can break without breaking the structure: text above
 twice. Any non-blank text before the first `##` heading is reported. A leading
 blank line is not a preamble, because the template starts that way.
 
+`## Residual risk` is the section a later round comes back to, so being
+non-empty is not enough. Each bullet states its `Trigger:` and an
+`Observed by:` line that names a command or a link; "the deploy might fail"
+alone leaves the reader unable to tell whether it has happened. A round that
+opened none says `none` and names `README.md`, which is where the list lives,
+so "None." cannot hide the registry's contents from a reader.
+
 ## Rejection criteria
 
 A round is void and starts over when any of these is true:
