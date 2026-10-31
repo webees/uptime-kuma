@@ -157,6 +157,10 @@ five left with no content. A heading is a promise to write under it: the empty
 `## Verification` is what the template leaves behind, and an empty conclusion or
 residual is the same shape one section over.
 
+A heading inside a fence is a quotation, not a section. The examples a body
+pastes in — a skeleton to fix, a table to restore — are ignored, so the sections
+and the table rows are the ones outside code blocks.
+
 ## Rejection criteria
 
 A round is void and starts over when any of these is true:

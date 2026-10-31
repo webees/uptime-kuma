@@ -245,6 +245,7 @@ def assert_target_mode_is_actionable(
     case.assertIn("the same set arriving in another order", found["Report order"])
     case.assertIn("a heading written twice", found["Report order"])
     case.assertIn("the empty\n`## Verification`", found["Report order"])
+    case.assertIn("A heading inside a fence is a quotation", found["Report order"])
     case.assertIn("appears {len(matching)} times", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
 
     # The rejection list is the thing that voids a round; a subset is not one.
@@ -1665,6 +1666,34 @@ class RecurringContractTest(unittest.TestCase):
         self.assertIn(
             "`## Residual` appears 2 times",
             run_matrix(duplicate_section(good, "Residual risk"), document).stderr,
+        )
+        # A fence is how a body quotes an example, and a quoted `## Matrix`
+        # used to be read as the section: the real table then failed as
+        # "no header". A quoted `## Verification` counted as a second one, and
+        # a quoted table line was parsed as a row.
+        quoted = good.replace("## Conclusion\n", "## Conclusion\n\n```\n## Matrix\n```\n", 1)
+        self.assertEqual(run_matrix(quoted, document).returncode, 0)
+        # The same body with the fence mask removed: the quoted heading is read
+        # as the section, and the real table is never reached.
+        unfenced = run_mutated_matrix(
+            quoted,
+            document,
+            [('r"(?m)^## (.+)$", unfenced(body)', 'r"(?m)^## (.+)$", body')],
+        )
+        self.assertEqual(unfenced.returncode, 2, unfenced.stderr)
+        self.assertIn("the matrix has no header", unfenced.stderr)
+        # A quoted heading in the matrix section is not a second section, and a
+        # quoted table line is not a row.
+        self.assertEqual(
+            run_matrix(
+                good.replace("## Changes\n", "```markdown\n## Verification\n```\n\n## Changes\n", 1),
+                document,
+            ).returncode,
+            0,
+        )
+        self.assertEqual(
+            run_matrix(good.replace("## Changes\n", "```\n| x |\n```\n\n## Changes\n", 1), document).returncode,
+            0,
         )
 
         # History names a `git log` command. Until now the command was never
