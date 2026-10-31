@@ -268,18 +268,22 @@ def verification_problems(content: str) -> list[str]:
     for number, line in enumerate(text.splitlines(), start=1):
         if line.lstrip().startswith(("- ", "* ")) and not names_run(line):
             problems.append(f"`## Verification` line {number} names no run: {line.strip()!r}")
-        if not ABSENT.search(line):
-            for issue in reference_issues(line):
-                problems.append(f"`## Verification` line {number}: {issue}")
+        for issue in reference_issues(line, tolerate_missing=bool(ABSENT.search(line))):
+            problems.append(f"`## Verification` line {number}: {issue}")
     return problems
 
 
-def reference_issues(line: str) -> list[str]:
+def reference_issues(line: str, *, tolerate_missing: bool = False) -> list[str]:
     """Repository paths a verification line names that no longer run.
 
     URLs are dropped first, so the host and its path segments are not read as
     a file. A dotted unittest module is the third spelling of the same thing,
     and is only converted when its first segment is a directory here.
+
+    `absent:` excuses a missing *file*, because that is the ghost the line is
+    demonstrating. It does not excuse the rest: a command naming a file that is
+    still here and a case that never was is a different defect, and skipping
+    the whole line let the marker launder it.
     """
     bare = URL.sub(" ", line)
     problems = [
@@ -287,6 +291,8 @@ def reference_issues(line: str) -> list[str]:
         for path in PATHLIKE.findall(bare)
         if not Path(path.rstrip(".,;")).exists()
     ]
+    if tolerate_missing:
+        problems = [issue for issue in problems if not issue.startswith("names missing file")]
     for token in re.findall(r"`([^`]+)`", bare):
         words = [word.strip("(),.;") for word in token.split()]
         for word in words:
@@ -304,7 +310,8 @@ def reference_issues(line: str) -> list[str]:
             )
             path = "/".join(parts[:cut]) + ".py"
             if not Path(path).is_file():
-                problems.append(f"names missing file {path}")
+                if not tolerate_missing:
+                    problems.append(f"names missing file {path}")
                 continue
             # The file existing is not the run: after `tests.test_x` the rest
             # of the dotted name is the case, and a renamed case runs nothing.

@@ -250,6 +250,9 @@ def assert_target_mode_is_actionable(
     case.assertIn("names no run", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("The command has to still run", found["Report order"])
     case.assertIn("is marked `absent:`", found["Report order"])
+    # The marker used to excuse the whole line, so a renamed case rode along.
+    case.assertIn("The marker excuses only a\nmissing file", found["Report order"])
+    case.assertIn("tolerate_missing", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("every bullet names a\nfile", found["Report order"])
     case.assertIn("names no file", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("appears {len(matching)} times", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
@@ -1809,6 +1812,32 @@ class RecurringContractTest(unittest.TestCase):
             ).returncode,
             0,
         )
+        # `absent:` marks the *ghost*, not the whole line. A command that names
+        # a file still present but a case that never existed there is a
+        # different defect, and the marker must not launder it.
+        ghost_case = (
+            "- absent: `python3.13 -m unittest tests.test_recurring_gate."
+            + absent
+            + "` — `OK`"
+        )
+        self.assertIn(
+            "names tests/test_recurring_gate.py with no",
+            run_matrix(
+                good.replace("`Ran 32 tests OK`\n", f"`Ran 32 tests OK`\n{ghost_case}\n", 1),
+                document,
+            ).stderr,
+        )
+        # The control for that: excusing the whole line, which is what the
+        # marker did before, puts the absent case back in the green.
+        without_narrowing = run_mutated_matrix(
+            good.replace("`Ran 32 tests OK`\n", f"`Ran 32 tests OK`\n{ghost_case}\n", 1),
+            document,
+            [("    if tolerate_missing:\n"
+              "        problems = [issue for issue in problems "
+              "if not issue.startswith(\"names missing file\")]",
+              "    if tolerate_missing:\n        return []")],
+        )
+        self.assertEqual(without_narrowing.returncode, 0, without_narrowing.stderr)
         # `## Changes` is the list a reviewer maps onto the diff. "x" and "made
         # things better" named nothing, and a bullet for a file outside the PR
         # read the same as one of its changes.

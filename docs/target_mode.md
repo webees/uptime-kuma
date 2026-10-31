@@ -177,7 +177,10 @@ The command has to still run: a cited script or test file that is gone, and a
 case name that no longer occurs in its file, are reported. A test moved in the
 same PR therefore has to have its verification lines moved with it.
 An example that is *meant* to be absent is marked `absent:` on its line, or the
-check reports the negative case it is demonstrating.
+check reports the negative case it is demonstrating. The marker excuses only a
+missing file: it is the ghost the line shows on purpose. A command whose file
+still exists but whose case was renamed away is a different defect, so that is
+still reported and the marker cannot launder a whole line.
 
 `## Conclusion` stays prose, because "why" cannot be resolved against a tree,
 but it is the first thing read and therefore the place a reader starts. It has
