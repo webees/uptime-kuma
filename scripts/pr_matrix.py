@@ -45,6 +45,9 @@ SPAN = re.compile(r"`([^`]+)`")
 # it; a control must name something runnable, not assert one exists.
 HISTORY = re.compile(r"\b(never fixed|never established|regressed|unchanged|partial(?:ly)?|not established)\b")
 COMMIT = re.compile(r"\b[0-9a-f]{7,40}\b")
+# History names the command that produced its evidence: `git log -Sx` or
+# `git log -Gx`. The needle may hold `@` (a Caddy matcher) or `.`/`-`.
+LOG = re.compile(r"git log -(S|G)`?([\w@.-]+)")
 RUNNABLE = re.compile(r"`[^`]+`|\btests?/[^\s:]+:")
 # A control is only runnable if the file it names still exists; a `path:symbol`
 # is the protocol's spelling, so both halves are checked.
@@ -114,6 +117,27 @@ def unreachable(hashes: list[str]) -> list[str]:
         for sha, commit in zip(hashes, full.split())
         if commit not in reachable()
     ]
+
+
+_LOG: dict[tuple[str, str], set[str]] = {}
+
+
+def log_output(flag: str, needle: str) -> set[str]:
+    """The commits `git log -S/-G<needle>` reports, cached per needle."""
+    key = (flag, needle)
+    if key not in _LOG:
+        done = subprocess.run(
+            ["git", "log", f"-{flag}{needle}", "--format=%h"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if done.returncode != 0:
+            raise Unreadable(
+                f"git log -{flag}{needle} failed: {done.stderr.strip()}"
+            )
+        _LOG[key] = set(done.stdout.split())
+    return _LOG[key]
 
 
 def classes(document: str) -> list[str]:
@@ -300,6 +324,21 @@ def check(
             )
         # A hash that does not resolve is worse than none: it reads as proof.
         cited = COMMIT.findall(history)
+        named = LOG.search(history)
+        if cited and not named:
+            problems.append(
+                f"line {number}: {title!r} History names no `git log` command, "
+                f"so nobody can tell which commits it looked at"
+            )
+        # A hash is only evidence of *this* class if the named command reported
+        # it; any reachable commit would otherwise read as history.
+        produced = log_output(named.group(1), named.group(2)) if named else set()
+        for sha in cited:
+            if named and sha not in produced:
+                problems.append(
+                    f"line {number}: {title!r} History cites {sha}, which is not "
+                    f"in the output of `git log -{named.group(1)}{named.group(2)}`"
+                )
         gone = unresolved(cited)
         alive = [sha for sha in cited if sha not in gone]
         stale = set(unreachable(alive))
