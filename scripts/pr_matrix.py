@@ -200,28 +200,54 @@ def matrix_rows(body: str) -> list[str]:
     return rows
 
 
+def report_sections(body: str) -> list[tuple[str, str]]:
+    """Every `## Heading` and its content, in order; the body may open with one."""
+    found = re.finditer(r"(?m)^## (.+)$", body)
+    placed = [match for match in found]
+    return [
+        (
+            match.group(1).strip(),
+            body[match.end() : placed[number + 1].start() if number + 1 < len(placed) else len(body)],
+        )
+        for number, match in enumerate(placed)
+    ]
+
+
 def report_problems(body: str) -> list[str]:
-    """The report sections, in order, and the ones that have to hold content."""
-    headings = [head.strip() for head in re.findall(r"(?m)^## (.+)$", body)]
+    """The report sections, in order, each present once and carrying content.
+
+    A section heading is a promise to write something under it. Heading-only
+    `## Conclusion` and `## Verification` are what the template leaves behind,
+    and a repeated `## Verification` reads as a second run while the order
+    check counts the sections twice.
+    """
+    placed = report_sections(body)
     problems: list[str] = []
     for name in REPORT:
-        if name == "Residual":
-            if not any(head.startswith(name) for head in headings):
+        matching = [head for head, _ in placed if head == name or head.startswith(f"{name} ")]
+        if not matching:
+            if name == "Residual":
                 problems.append("the body has no residual section")
-            continue
-        if name not in headings:
-            problems.append(f"the body has no `## {name}` section")
-    ordered = [head for head in headings if head in REPORT or head.startswith("Residual")]
+            else:
+                problems.append(f"the body has no `## {name}` section")
+        elif len(matching) > 1:
+            problems.append(f"`## {name}` appears {len(matching)} times")
+        else:
+            head, content = next(item for item in placed if item[0] == matching[0])
+            if not content.strip():
+                problems.append(f"`## {head}` is empty")
+    # One entry per section: a duplicate is already named above, and counting it
+    # again here would report the same heading twice as an order problem too.
+    ordered = list(
+        dict.fromkeys(
+            head for head, _ in placed if head in REPORT or head.startswith("Residual")
+        )
+    )
     rank = lambda head: REPORT.index(head.split()[0])
     if ordered != sorted(ordered, key=rank):
         problems.append(
             f"the report order is {', '.join(REPORT)}, got {', '.join(ordered)}"
         )
-    for name in ("Verification",):
-        if name in headings:
-            block = body.split(f"\n## {name}\n", 1)[-1].split("\n## ", 1)[0]
-            if not block.strip():
-                problems.append(f"`## {name}` is empty")
     return problems
 
 

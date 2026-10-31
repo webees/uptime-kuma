@@ -236,14 +236,16 @@ def assert_target_mode_is_actionable(
 
     # The report order was prose only, so a body of nothing but the matrix
     # passed: no conclusion, no changes, no run output, no residuals. The five
-    # headings are one list in the checker and in the protocol, in order, and
-    # the empty verification is the shape the template leaves behind.
+    # headings are one list in the checker and in the protocol, in order, each
+    # once, and a heading without content is the shape the template leaves.
     case.assertIn(
         'REPORT = ("Conclusion", "Matrix", "Changes", "Verification", "Residual")',
         (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"),
     )
     case.assertIn("the same set arriving in another order", found["Report order"])
-    case.assertIn("`## Verification` is empty", found["Report order"])
+    case.assertIn("a heading written twice", found["Report order"])
+    case.assertIn("the empty\n`## Verification`", found["Report order"])
+    case.assertIn("appears {len(matching)} times", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
 
     # The rejection list is the thing that voids a round; a subset is not one.
     for clause in ("a matrix column or row is missing",
@@ -329,7 +331,19 @@ def empty_section(body: str, name: str) -> str:
     """A body where one section keeps its heading and loses its content."""
     head = f"\n## {name}\n"
     content = body_sections(body)[name]
-    return body.replace(head + content, head + "\n", 1)
+    # The conclusion opens the body, so its heading has no leading newline.
+    for spelling in (head, head.lstrip("\n")):
+        if spelling + content in body:
+            return body.replace(spelling + content, spelling + "\n", 1)
+    raise AssertionError(name)
+
+
+def duplicate_section(body: str, name: str) -> str:
+    """A body that repeats one `## name` block, content and all."""
+    head = f"\n## {name}\n"
+    block = head + body_sections(body)[name]
+    assert block in body, name
+    return body + block
 
 
 def swap_sections(body: str, first: str, second: str) -> str:
@@ -1617,10 +1631,40 @@ class RecurringContractTest(unittest.TestCase):
             run_matrix(swap_sections(good, "Matrix", "Changes"), document).stderr,
         )
         # A section heading with nothing under it is the shape a rushed body
-        # leaves after the template; the verification also has to carry a
-        # command, not just a heading.
+        # leaves after the template. `## Verification` was the only one checked
+        # at first, so an empty conclusion, change list and residual all passed
+        # an otherwise complete report.
+        for section, label in (
+            ("Conclusion", "`## Conclusion` is empty"),
+            ("Changes", "`## Changes` is empty"),
+            ("Verification", "`## Verification` is empty"),
+            ("Residual risk", "`## Residual risk` is empty"),
+        ):
+            self.assertIn(label, run_matrix(empty_section(good, section), document).stderr)
+        # A verification that opens the body is still found and still empty;
+        # the order complaint is separate so the empty one is not hidden.
+        opening_empty = "## Verification\n\n" + "\n".join(
+            f"## {name}\n{body_sections(good)[name]}"
+            for name in ("Conclusion", "Matrix", "Changes", "Residual risk")
+        )
+        emptied = run_matrix(opening_empty, document).stderr
+        self.assertIn("`## Verification` is empty", emptied)
+        self.assertIn("the report order is", emptied)
+        # The message names the heading as written, so `## Residual risk` does
+        # not have to be renamed to the shorter protocol word to be reported.
         self.assertIn(
-            "`## Verification` is empty", run_matrix(empty_section(good, "Verification"), document).stderr
+            "`## Residual risk` is empty",
+            run_matrix(empty_section(good, "Residual risk"), document).stderr,
+        )
+        # Two verifications read as two runs. The duplicate is named, and the
+        # order check folds it first, so a copy appended at the end is not also
+        # reported as "Verification after Residual".
+        twice = run_matrix(duplicate_section(good, "Verification"), document).stderr
+        self.assertIn("`## Verification` appears 2 times", twice)
+        self.assertNotIn("the report order is", twice)
+        self.assertIn(
+            "`## Residual` appears 2 times",
+            run_matrix(duplicate_section(good, "Residual risk"), document).stderr,
         )
 
         # History names a `git log` command. Until now the command was never
