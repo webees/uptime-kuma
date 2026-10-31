@@ -759,10 +759,14 @@ def check(
                 f"so nobody can tell which commits it looked at"
             )
         # A hash is only evidence of *this* class if the named command reported
-        # it; any reachable commit would otherwise read as history.
+        # it; any reachable commit would otherwise read as history. The reported
+        # form is abbreviated, so a hash spelled in full is the same commit and
+        # has to compare by prefix rather than literally.
         produced = log_output(*named) if named else set()
         for sha in cited:
-            if named and sha not in produced:
+            if named and not any(
+                short.startswith(sha) or sha.startswith(short) for short in produced
+            ):
                 problems.append(
                     f"line {number}: {title!r} History cites {sha}, which is not "
                     f"in the output of `git log -{named[0]}{named[1]}`"
