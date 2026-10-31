@@ -229,6 +229,7 @@ def assert_target_mode_is_actionable(
     # A guard file of directives is not runnable and a bare `ok` quotes nothing,
     # so the protocol has to say both.
     case.assertIn("is directives, so a control pointing there", found["Matrix"])
+    case.assertIn("name the class's *own* control", found["Matrix"])
     case.assertIn("quote, so `ok` alone does", found["Matrix"])
     case.assertIn("a quote with no number", found["Matrix"])
     case.assertIn("Observed result quotes nothing", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
@@ -267,10 +268,10 @@ def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
     rows = "\n".join(
         f"| {title} | unchanged, `git log -Gx` → `dbf6c26` | "
         f"`{authority_guard(document, title)}` | "
-        f"`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body` | "
-        f"`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body` | "
-        f"`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body` | "
-        f"`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body` | {result} |"
+        f"`{authority_control(document, title)}` | "
+        f"`{authority_control(document, title)}` | "
+        f"`{authority_control(document, title)}` | "
+        f"`{authority_control(document, title)}` | {result} |"
         for title in target_classes(document)
     )
     return f"## Conclusion\n\nx\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n|{'---|' * len(TARGET_MODE_COLUMNS)}\n{rows}\n\n## Changes\n\nx\n"
@@ -563,6 +564,13 @@ def authority_guard(document: str, title: str) -> str:
     """A guard that names the class's first authority and its symbol."""
     span = authority_path(document, title)
     return span if ":" in span else f"{span}:x"
+
+
+def authority_control(document: str, title: str) -> str:
+    """The first `path:symbol` run the class records as its own control."""
+    block = document.split(f"\n## {title}\n", 1)[1].split("\n## ", 1)[0]
+    run = block.split("\nMutation control:", 1)[1].split("\n\n", 1)[0]
+    return next(span for span in re.findall(r"`([^`]+)`", run) if "/" in span and ":" in span)
 
 
 def run_matrix(
@@ -1402,10 +1410,8 @@ class RecurringContractTest(unittest.TestCase):
             )
         self.assertEqual(
             run_matrix(
-                replace_row(
-                    good,
-                    "Mutation control",
-                    "`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body`",
+                replace_cells(
+                    good, "Mutation control", lambda title: f"`{authority_control(document, title)}`"
                 ),
                 document,
             ).returncode,
@@ -1504,6 +1510,27 @@ class RecurringContractTest(unittest.TestCase):
         self.assertIn(
             "quotes no output",
             broken(replace_row(good, "Observed result", "`ok`")),
+        )
+
+        # A resolvable test is not necessarily *this* test. The guard column
+        # was already pinned to the class's recorded authority; the control and
+        # the evidence columns were not, so C6's `check_process_supervision`
+        # filled every row and each one read as audited.
+        foreign = "`tests/runtime_smoke.py:{}`".format("check_" + "process_supervision")
+        for column in ("Positive", "Boundary", "Negative", "Mutation control"):
+            self.assertIn(
+                f"{column} is not this class's control",
+                broken(replace_row(good, column, foreign)),
+            )
+        # The other direction: the control recorded for the class passes.
+        self.assertEqual(
+            run_matrix(
+                replace_cells(
+                    good, "Mutation control", lambda title: f"`{authority_control(document, title)}`"
+                ),
+                document,
+            ).returncode,
+            0,
         )
 
         # History names a `git log` command. Until now the command was never
@@ -1613,7 +1640,9 @@ class RecurringContractTest(unittest.TestCase):
         without_directive = run_mutated_matrix(
             replace_row(good, "Mutation control", "`config/Caddyfile:@denied`"),
             document,
-            [("    if directives:", "    if False and directives:")],
+            [("    if directives:", "    if False and directives:"),
+             ('        elif "/" in span and ":" in span and span not in recorded:',
+              '        elif False and span not in recorded:')],
         )
         self.assertEqual(without_directive.returncode, 0, without_directive.stderr)
 
@@ -1703,7 +1732,9 @@ class RecurringContractTest(unittest.TestCase):
                 "`tests/test_recurring_gate.py:{}`".format("test_" + "deleted_long_ago"),
             ),
             document,
-            [('        elif not re.search(', '        elif False and not re.search(')],
+            [('        elif not re.search(', '        elif False and not re.search('),
+             ('        elif "/" in span and ":" in span and span not in recorded:',
+              '        elif False and span not in recorded:')],
         )
         self.assertEqual(without_case.returncode, 0, without_case.stderr)
 
@@ -1731,7 +1762,11 @@ class RecurringContractTest(unittest.TestCase):
             replace_row(good, "Boundary", "`tests/gone.py:case`"),
             document,
             [("    problems.extend(reference_problems(title, column, text))",
-              "    problems.extend([])")],
+              "    problems.extend([])"),
+             # The same cell is also unrecorded, so the membership rule has to
+             # go with the lookup it would otherwise trip on.
+             ('        elif "/" in span and ":" in span and span not in recorded:',
+              '        elif False and span not in recorded:')],
         )
         self.assertEqual(without_lookup.returncode, 0, without_lookup.stderr)
 
@@ -1743,6 +1778,16 @@ class RecurringContractTest(unittest.TestCase):
               "    if False and not RUNNABLE.search(text):\n        return [")],
         )
         self.assertEqual(without_control.returncode, 0, without_control.stderr)
+
+        # And the membership rule on its own: a run that exists, resolves and
+        # is simply the neighbour's class still reads as this row's control.
+        without_membership = run_mutated_matrix(
+            replace_row(good, "Mutation control", foreign),
+            document,
+            [('        elif "/" in span and ":" in span and span not in recorded:',
+              '        elif False and span not in recorded:')],
+        )
+        self.assertEqual(without_membership.returncode, 0, without_membership.stderr)
 
         # Mutation control for the guard column: without the comparison any
         # credible-looking path passes and the row reads as audited.

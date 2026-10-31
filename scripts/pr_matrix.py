@@ -217,6 +217,23 @@ def paths(spans: list[str]) -> set[str]:
     return {span.split(":")[0] for span in spans}
 
 
+def controls(document: str) -> dict[str, set[str]]:
+    """The `path:symbol` runs each class records as its own controls.
+
+    The guard column is pinned to the authority for the same reason: a test
+    that resolves is not necessarily *this* class's test, so a neighbour's
+    control reads as an audit of an invariant it never touches.
+    """
+    found: dict[str, set[str]] = {}
+    for title in classes(document):
+        body = document.split(f"\n## {title}\n", 1)[1].split("\n## ", 1)[0]
+        block = body.split("\nMutation control:", 1)[-1].split("\n\n", 1)[0]
+        found[title] = {
+            span for span in SPAN.findall(block) if "/" in span and ":" in span
+        }
+    return found
+
+
 def guard_problems(title: str, guard: str, recorded: list[str]) -> list[str]:
     """One problem per guard that is not the authority this class records.
 
@@ -292,12 +309,14 @@ def reference_problems(title: str, column: str, text: str) -> list[str]:
 NON_RUNNABLE = {"config/Caddyfile"}
 
 
-def run_problems(title: str, column: str, text: str) -> list[str]:
+def run_problems(
+    title: str, column: str, text: str, recorded: set[str]
+) -> list[str]:
     """Everything wrong with a cell that is supposed to name a run.
 
     A span has to name something typeable, the named file and symbol have to
-    still exist, and a gesture at a directive file has to become the test that
-    drives it.
+    still exist, a named `path:symbol` has to be one the class records, and a
+    gesture at a directive file has to become the test that drives it.
     """
     if not text:
         return []
@@ -307,6 +326,11 @@ def run_problems(title: str, column: str, text: str) -> list[str]:
     for span in SPAN.findall(text):
         if not COMMAND.search(span):
             problems.append(f"{title!r} {column} names no command: {span!r}")
+        elif "/" in span and ":" in span and span not in recorded:
+            problems.append(
+                f"{title!r} {column} is not this class's control: {span!r} is "
+                f"not recorded under its `Mutation control:`"
+            )
     problems.extend(reference_problems(title, column, text))
     directives = sorted({path for path, _ in REFERENCE.findall(text) if path in NON_RUNNABLE})
     if directives:
@@ -327,6 +351,7 @@ def check(
     """Return one problem per violation; empty means the matrix is complete."""
     expected = classes(document)
     owned = authorities(document)
+    controlled = controls(document)
     rows = matrix_rows(body)
     problems: list[str] = []
 
@@ -395,7 +420,7 @@ def check(
         # describe one, and whatever they name has to still be there.
         for column in ("Mutation control", *EVIDENCE):
             for problem in run_problems(
-                title, column, found[COLUMNS.index(column)]
+                title, column, found[COLUMNS.index(column)], controlled.get(title, set())
             ):
                 problems.append(f"line {number}: {problem}")
         guard = found[COLUMNS.index("Authoritative guard")]

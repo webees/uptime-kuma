@@ -126,6 +126,10 @@ One row per class, always these eight columns, in this order:
   cannot be run. A guard file is not runnable by itself — `config/Caddyfile`
   is directives, so a control pointing there has to name the test that drives
   them.
+  The control and the three evidence columns name the class's *own* control —
+  one of the `path:symbol` runs it records under `Mutation control:`. A test
+  that resolves is not necessarily this test, so a neighbour's row copied
+  across reads as an audit of an invariant it never touches.
 - `Observed result` quotes the actual output. Anything not run says `未验证`
   with the reason; anything else is a claim and must quote, so `ok` alone does
   not pass — and a quoted `ok` does not either, because a quote with no number
