@@ -48,7 +48,9 @@ COMMIT = re.compile(r"\b[0-9a-f]{7,40}\b")
 RUNNABLE = re.compile(r"`[^`]+`|\btests?/[^\s:]+:")
 # A control is only runnable if the file it names still exists; a `path:symbol`
 # is the protocol's spelling, so both halves are checked.
-REFERENCE = re.compile(r"`([\w./-]+):(\w[\w.-]*)`")
+# The symbol may start with `@`: Caddy's named matchers are spelled that way,
+# and they are exactly the non-runnable references a control has to avoid.
+REFERENCE = re.compile(r"`([\w./-]+):([\w@][\w.@-]*)`")
 # The three evidence columns are prose the protocol says must name the command
 # that ran. "yes" and "ran" are the shapes that read like proof without one.
 EVIDENCE = ("Positive", "Boundary", "Negative")
@@ -236,6 +238,23 @@ def reference_problems(title: str, column: str, text: str) -> list[str]:
     return problems
 
 
+# A control has to name a run, and `config/Caddyfile` is a file of directives:
+# its "symbols" are not commands, so pointing a control at one reads as proof
+# while nothing can be executed.
+NON_RUNNABLE = {"config/Caddyfile"}
+
+
+def runnable_problems(title: str, column: str, text: str) -> list[str]:
+    """A control must name a run, not a directive that merely exists."""
+    problems = reference_problems(title, column, text)
+    if any(Path(path) in NON_RUNNABLE or path in NON_RUNNABLE for path, _ in REFERENCE.findall(text)):
+        problems.append(
+            f"{title!r} {column} is a bare directive on {sorted({p for p, _ in REFERENCE.findall(text) if p in NON_RUNNABLE})}; "
+            f"name the test that runs it"
+        )
+    return problems
+
+
 def check(
     body: str,
     document: str,
@@ -302,7 +321,7 @@ def check(
             )
         # The control has to be runnable: a named file that is gone is a
         # command nobody can type.
-        for problem in reference_problems(title, "Mutation control", control):
+        for problem in runnable_problems(title, "Mutation control", control):
             problems.append(f"line {number}: {problem}")
         # The three evidence columns must name a run, not describe one.
         for column in EVIDENCE:
@@ -323,6 +342,13 @@ def check(
                 problems.append(f"line {number}: {problem}")
         if found[-1] and UNVERIFIED.match(found[-1]) and len(found[-1].split()) < 3:
             problems.append(f"line {number}: {title!r} says 未验证 without a reason")
+        # `未验证` is the one legal empty answer; anything else claims a run
+        # happened and has to quote what it printed.
+        elif found[-1] and not UNVERIFIED.match(found[-1]) and not SPAN.search(found[-1]):
+            problems.append(
+                f"line {number}: {title!r} Observed result quotes nothing; "
+                f"a word is not output"
+            )
         if touched and found[-1] and UNVERIFIED.match(found[-1]):
             hit = sorted(paths(owned.get(title, [])) & set(touched))
             if hit:

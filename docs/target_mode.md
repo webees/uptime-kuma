@@ -114,9 +114,12 @@ One row per class, always these eight columns, in this order:
   what changed when the guard was removed. "5 controls" is a count, not a
   location; a control that stays green proves nothing. A backticked
   `path:symbol` must still exist: a control in a deleted file or a deleted case
-  cannot be run.
+  cannot be run. A guard file is not runnable by itself — `config/Caddyfile`
+  is directives, so a control pointing there has to name the test that drives
+  them.
 - `Observed result` quotes the actual output. Anything not run says `未验证`
-  with the reason.
+  with the reason; anything else is a claim and must quote, so `ok` alone does
+  not pass.
 
 The matrix goes into the PR body and the final report. It is a review artifact,
 not a score, and it never becomes a per-round file.
