@@ -222,6 +222,7 @@ def assert_target_mode_is_actionable(
     case.assertIn("The needle is taken whole — path separators", found["Matrix"])
     case.assertIn("compared by prefix rather than as text", found["Matrix"])
     case.assertIn("The needle cannot be empty", found["Matrix"])
+    case.assertIn("A bullet is whatever Markdown renders as a list item", found["Report order"])
     case.assertIn("History names an empty `git log` needle", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("short.startswith(sha) or sha.startswith(short)", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("deleted file or a deleted case", found["Matrix"])
@@ -1791,6 +1792,59 @@ class RecurringContractTest(unittest.TestCase):
                 document,
             ).stderr,
         )
+        # A bullet is what Markdown renders as one, and that is four shapes.
+        # Reading only the two GitHub's own template happens to use let the
+        # other two through every rule below: `1. all green` passed the
+        # verification check, and a `+` bullet in `## Changes` was never asked
+        # to name the file it changed.
+        run = "- `python3.13 -m unittest tests.test_recurring_gate` — `Ran 32 tests OK`"
+        for ordered in ("1. all green", "1) all green", "+ all green"):
+            self.assertIn(
+                "`## Verification` line 3 names no run",
+                run_matrix(good.replace(run, ordered, 1), document).stderr,
+            )
+        # The same bullet shapes are what `## Changes` and the residual list
+        # read. `x` is the template's placeholder, so the rule never had to
+        # hold for either.
+        for bullet in ("+ made things better", "1. made things better", "1) made things better"):
+            self.assertIn(
+                "`## Changes` line 3 names no file",
+                run_matrix(good.replace("## Changes\n\nx", f"## Changes\n\n{bullet}", 1), document).stderr,
+            )
+        self.assertIn(
+            "names no trigger",
+            run_matrix(
+                good.replace(
+                    "None opened; the recorded ones live in `README.md`.",
+                    "1. The deploy might fail.",
+                    1,
+                ),
+                document,
+            ).stderr,
+        )
+        # Not a widening that only accepts more: a numbered bullet naming the
+        # command, and a `+` bullet naming the file, are ordinary bullets.
+        self.assertEqual(
+            run_matrix(
+                good.replace(run, "1. `python3.13 -m unittest tests.test_recurring_gate` — `Ran 32 tests OK`", 1),
+                document,
+            ).returncode,
+            0,
+        )
+        self.assertEqual(
+            run_matrix(good.replace("## Changes\n\nx", "## Changes\n\n+ `scripts/pr_matrix.py`: added", 1), document).returncode,
+            0,
+        )
+        # Mutation control: the two prefixes the template used. `+` and the
+        # ordered forms stop being bullets, so the added line is skipped and the
+        # body passes on the good bullet the template always had.
+        short = run_mutated_matrix(
+            good.replace(run, f"{run}\n1. all green", 1),
+            document,
+            [('BULLET = re.compile(r"[-*+] |\\d{1,9}[.)] ")', 'BULLET = re.compile(r"[-*] ")')],
+        )
+        self.assertEqual(short.returncode, 0, short.stderr)
+
         # A link is a runnable reference of its own, which is how a CI run gets
         # cited without pasting its log.
         self.assertEqual(

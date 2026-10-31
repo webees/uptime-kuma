@@ -178,6 +178,11 @@ the registry by walking both, so a swapped pair turns that walk into a search
 even though every class is still present. Only the classes that appear are
 ordered against each other, so the first complaint stays "missing class".
 
+A bullet is whatever Markdown renders as a list item: `-`, `*`, `+`, or an
+ordered `1.` / `1)`. The rules below are written per bullet, so they apply to
+all four shapes; the template happens to use `-`, and reading only that let a
+`1. all green` pass an unchecked verification line.
+
 `## Verification` is the section a reader repeats, so every bullet in it names
 a command in backticks or links a run. "passed", "see above" and "all green"
 describe a verification without letting anyone re-run or open it.
