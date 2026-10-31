@@ -80,6 +80,10 @@ COMMAND = re.compile(
 # An observation is output, and output carries a number or a verdict a run
 # printed; a bare `ok` is a mood, not a line anyone can compare.
 OUTPUT = re.compile(r"\d|\b(OK|passed|failed|refused|denied|in sync|RULE DRIFT|matches)\b")
+# A verification is a list of things that ran, so every one of them has to be
+# repeatable or linkable. "passed", "see the matrix above" and "all green"
+# describe a run without letting a reader run or open it.
+URL = re.compile(r"https?://\S+")
 # A control is only runnable if the file it names still exists; a `path:symbol`
 # is the protocol's spelling, so both halves are checked.
 # The symbol may start with `@`: Caddy's named matchers are spelled that way,
@@ -234,6 +238,26 @@ def matrix_rows(body: str) -> list[str]:
     raise Unreadable("the body has no `## Matrix` section")
 
 
+def verification_problems(content: str) -> list[str]:
+    """Every verification line has to carry a command or a link.
+
+    The section is the one place a reader goes to repeat the round, so a word
+    that says it happened ("passed", "see above") repeats nothing. Prose about
+    a deployment is still prose; the bullets are the claims.
+    """
+    text = unfenced(content)
+    names_run = lambda line: bool(URL.search(line)) or any(
+        COMMAND.search(span) for span in SPAN.findall(line)
+    )
+    problems: list[str] = []
+    if not any(names_run(line) for line in text.splitlines()):
+        problems.append("`## Verification` names no run")
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line.lstrip().startswith(("- ", "* ")) and not names_run(line):
+            problems.append(f"`## Verification` line {number} names no run: {line.strip()!r}")
+    return problems
+
+
 def report_problems(body: str) -> list[str]:
     """The report sections, in order, each present once and carrying content.
 
@@ -257,6 +281,8 @@ def report_problems(body: str) -> list[str]:
             head, content = next(item for item in placed if item[0] == matching[0])
             if not content.strip():
                 problems.append(f"`## {head}` is empty")
+            elif name == "Verification":
+                problems.extend(verification_problems(content))
     # One entry per section: a duplicate is already named above, and counting it
     # again here would report the same heading twice as an order problem too.
     ordered = list(

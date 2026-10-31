@@ -161,6 +161,10 @@ A heading inside a fence is a quotation, not a section. The examples a body
 pastes in — a skeleton to fix, a table to restore — are ignored, so the sections
 and the table rows are the ones outside code blocks.
 
+`## Verification` is the section a reader repeats, so every bullet in it names
+a command in backticks or links a run. "passed", "see above" and "all green"
+describe a verification without letting anyone re-run or open it.
+
 ## Rejection criteria
 
 A round is void and starts over when any of these is true:
