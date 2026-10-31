@@ -44,6 +44,8 @@ FRONT_MATTER = {"Target-Mode Prompt", "Every-Round Goal Gate"}
 # every per-cell rule and still leaves the conclusion, the changes, the run
 # output and the residuals out — the four parts the matrix is read *after*.
 REPORT = ("Conclusion", "Matrix", "Changes", "Verification", "Residual")
+# A fence line: ```` ``` ```` or `~~~`, indented by at most three spaces.
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 SPAN = re.compile(r"`([^`]+)`")
 # `History` and `Mutation control` are prose columns a row can satisfy with a
 # word. History must carry its classification *and* the commit that supports
@@ -187,23 +189,28 @@ def cells(line: str) -> list[str]:
     return [cell.replace("\\|", "|").strip() for cell in re.split(r"(?<!\\)\|", body)]
 
 
-def matrix_rows(body: str) -> list[str]:
-    # The section may open the body, so the leading newline cannot be assumed.
-    section = body.split("\n## Matrix\n", 1)
-    if len(section) == 1 and body.startswith("## Matrix\n"):
-        section = ["", body[len("## Matrix\n"):]]
-    if len(section) != 2:
-        raise Unreadable("the body has no `## Matrix` section")
-    rows = [line for line in section[1].split("\n## ", 1)[0].splitlines() if line.strip().startswith("|")]
-    if len(rows) < 2:
-        raise Unreadable("the matrix has no header")
-    return rows
+def unfenced(body: str) -> str:
+    """The body with fenced code blanked out, one character for one.
+
+    A PR that quotes an example body puts `## Matrix` inside a fence, and the
+    plain `^## ` search then finds the example instead of the section. The
+    mask keeps every offset, so a heading found in it is cut out of the body.
+    """
+    out, fence = [], None
+    for line in body.split("\n"):
+        mark = FENCE.match(line)
+        if mark:
+            fence = None if fence == mark.group(1)[0] else (fence or mark.group(1)[0])
+        out.append(" " * len(line) if mark or fence else line)
+    return "\n".join(out)
 
 
 def report_sections(body: str) -> list[tuple[str, str]]:
-    """Every `## Heading` and its content, in order; the body may open with one."""
-    found = re.finditer(r"(?m)^## (.+)$", body)
-    placed = [match for match in found]
+    """Every `## Heading` outside a fence and its content, in order.
+
+    The body may open with one, so the leading newline cannot be assumed.
+    """
+    placed = list(re.finditer(r"(?m)^## (.+)$", unfenced(body)))
     return [
         (
             match.group(1).strip(),
@@ -211,6 +218,20 @@ def report_sections(body: str) -> list[tuple[str, str]]:
         )
         for number, match in enumerate(placed)
     ]
+
+
+def matrix_rows(body: str) -> list[str]:
+    """The table lines of `## Matrix`, ignoring a table quoted in a fence."""
+    for head, content in report_sections(body):
+        if head != "Matrix":
+            continue
+        rows = [
+            line for line in unfenced(content).split("\n") if line.strip().startswith("|")
+        ]
+        if len(rows) < 2:
+            raise Unreadable("the matrix has no header")
+        return rows
+    raise Unreadable("the body has no `## Matrix` section")
 
 
 def report_problems(body: str) -> list[str]:
