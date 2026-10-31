@@ -257,6 +257,10 @@ def assert_target_mode_is_actionable(
     case.assertIn("The name is\nresolved, not just matched", found["Report order"])
     case.assertIn("if \"README.md\" not in named:", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("every bullet names a\nfile", found["Report order"])
+    # A trailing slash is a directory, and the protocol has to say it covers
+    # the tree instead of reading as an unknown path.
+    case.assertIn("A bullet may name a directory with a trailing slash", found["Report order"])
+    case.assertIn("DIRECTORY = re.compile", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("names no file", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("appears {len(matching)} times", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
 
@@ -1997,6 +2001,37 @@ class RecurringContractTest(unittest.TestCase):
             run_matrix(partial, document, ["docs/target_mode.md"]).stderr,
         )
         self.assertEqual(run_matrix(partial, document, ["scripts/pr_matrix.py"]).returncode, 0)
+        # A bullet may name a directory when the change is a rule across it.
+        # `docs/` ends in a slash, which the file pattern does not read, so a
+        # whole-directory change landed as "names no file" and lost its
+        # coverage.
+        whole_tree = good.replace(
+            "## Changes\n\nx", "## Changes\n\n- `docs/`: the protocol rules.", 1
+        )
+        self.assertEqual(
+            run_matrix(whole_tree, document, ["docs/target_mode.md"]).returncode, 0
+        )
+        self.assertIn(
+            "names missing directory docs/gone",
+            run_matrix(
+                good.replace(
+                    "## Changes\n\nx", "## Changes\n\n- `docs/gone/`: the rules.", 1
+                ),
+                document,
+                ["docs/target_mode.md"],
+            ).stderr,
+        )
+        # The control for that: the file pattern alone, which is what the
+        # section read before, has no shape for a trailing slash.
+        without_directories = run_mutated_matrix(
+            whole_tree,
+            document,
+            # The old reading: no directory shapes at all.
+            [("        found.extend((path, True) for path in trees)",
+              "        found = [(path.rstrip('.,;'), False) for path in PATHLIKE.findall(bare)]")],
+            ["docs/target_mode.md"],
+        )
+        self.assertIn("names no file", without_directories.stderr)
         # And the other direction: a bullet for a file the PR never touched is
         # a change the reviewer hunts for in the diff and does not find.
         self.assertIn(
@@ -2351,8 +2386,8 @@ class RecurringContractTest(unittest.TestCase):
             run_mutated_matrix(
                 both_bullets,
                 document,
-                [('                if Path(path).exists() and path not in touched:',
-                  '                if False and path not in touched:')],
+                [('                if Path(path).exists() and path not in touched and not inside:',
+                  '                if False and path not in touched and not inside:')],
                 ["scripts/pr_matrix.py"],
             ).returncode,
             0,
