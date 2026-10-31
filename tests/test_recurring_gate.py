@@ -1866,6 +1866,18 @@ class RecurringContractTest(unittest.TestCase):
             "names an empty observation",
             broken(good.replace("None opened; the recorded ones live in `README.md`.", empty_observation, 1)),
         )
+        # The word "none" is not the claim. A bullet can open with it — "none
+        # of the retries survive an outage" — and the whole section was read as
+        # "no residuals", so its fields were never checked.
+        none_in_a_bullet = "- none of the retries survive an outage; see `README.md`."
+        self.assertIn(
+            "names no trigger",
+            broken(good.replace("None opened; the recorded ones live in `README.md`.", none_in_a_bullet, 1)),
+        )
+        self.assertIn(
+            "names no observation",
+            broken(good.replace("None opened; the recorded ones live in `README.md`.", none_in_a_bullet, 1)),
+        )
         trigger_only = "- the deploy might fail\n  Trigger: a hand deploy.\n  Observed by: somebody."
         self.assertIn(
             "observation names no command",
@@ -2355,6 +2367,22 @@ class RecurringContractTest(unittest.TestCase):
                 [("            if not value:", "            if False:"),
                  ("            elif not (URL.search(value)",
                   "            elif False and not (URL.search(value)")],
+            ).returncode,
+            0,
+        )
+
+        # Mutation control 13: the `none` anchor. Unanchored, a bullet that
+        # merely opens with "none of" skips its own fields.
+        self.assertEqual(
+            run_mutated_matrix(
+                good.replace(
+                    "None opened; the recorded ones live in `README.md`.",
+                    "- none of the retries survive an outage; see `README.md`.",
+                    1,
+                ),
+                document,
+                [('    claims_none = re.search(r"(?m)^\\s*none\\b", text, re.IGNORECASE)',
+                  '    claims_none = re.search(r"\\bnone\\b", text, re.IGNORECASE)')],
             ).returncode,
             0,
         )

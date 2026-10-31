@@ -342,7 +342,9 @@ def residual_problems(content: str) -> list[str]:
     """
     text = unfenced(content)
     problems: list[str] = []
-    claims_none = re.search(r"\bnone\b", text, re.IGNORECASE)
+    # The claim is the section itself, not one occurrence of the word: a bullet
+    # may open "none of the retries survive…" and still need its own fields.
+    claims_none = re.search(r"(?m)^\s*none\b", text, re.IGNORECASE)
     if claims_none:
         if "README.md" not in text:
             problems.append("`## Residual risk` does not name README.md, where they are kept")
