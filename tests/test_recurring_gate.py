@@ -212,6 +212,11 @@ def assert_target_mode_is_actionable(
     # The protocol has to say so too, or the writer follows the old advice.
     case.assertIn("`git cat-file` cannot resolve", found["Matrix"])
     case.assertIn("not reachable from\n  `HEAD`", found["Matrix"])
+    # The history command is executed, so the protocol has to say so; otherwise
+    # a writer keeps quoting hashes it never looked up.
+    case.assertIn("The command is run, not read", found["Matrix"])
+    case.assertIn("History names no `git log` command", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    case.assertIn("in the output of `git log -", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("deleted file or a deleted case", found["Matrix"])
     # The three evidence columns are prose the same way: a word describes a run
     # without letting anyone repeat it.
@@ -1471,6 +1476,38 @@ class RecurringContractTest(unittest.TestCase):
             broken(replace_row(good, "Observed result", "ok")),
         )
 
+        # History names a `git log` command. Until now the command was never
+        # run: any reachable hash passed, related to the class or not. The
+        # command is the claim, so the hashes have to be its output.
+        # `-Gx` matches nearly every commit, so the needle has to be a real one
+        # and the quoted hash has to fall outside what it reports.
+        needle = "normalize_caddy_domains"
+        produced = subprocess.run(
+            ["git", "log", f"-S{needle}", "--format=%h"],
+            cwd=ROOT, capture_output=True, text=True, check=False,
+        ).stdout.split()
+        self.assertTrue(produced)
+        unrelated = next(
+            sha[:7]
+            for sha in subprocess.run(
+                ["git", "rev-list", "HEAD"], cwd=ROOT, capture_output=True, text=True
+            ).stdout.split()
+            if sha[:7] not in produced
+        )
+        stale_quote = broken(
+            replace_row(
+                good,
+                "History",
+                f"unchanged, `git log -S{needle}` → `{unrelated}`",
+            )
+        )
+        self.assertIn("is not in the output of", stale_quote)
+        # A History with no command at all says "related" without saying how.
+        self.assertIn(
+            "History names no `git log` command",
+            broken(replace_row(good, "History", "unchanged → `dbf6c26`")),
+        )
+
         # Mutation controls, one per column: each check is what turns its
         # words back into evidence, so dropping it lets that row pass again.
         vague_history = replace_row(good, "History", "n/a")
@@ -1498,7 +1535,11 @@ class RecurringContractTest(unittest.TestCase):
         without_reach = run_mutated_matrix(
             replace_row(good, "History", f"unchanged, `git log -Sx` → `{dangling_commit()}`"),
             document,
-            [("        stale = set(unreachable(alive))", "        stale = set()")],
+            # A freshly built commit is in no log output either, so the
+            # membership check is blanked alongside the reachability probe.
+            [("        stale = set(unreachable(alive))", "        stale = set()"),
+             ("            if named and sha not in produced:",
+              "            if False and named and sha not in produced:")],
         )
         self.assertEqual(without_reach.returncode, 0, without_reach.stderr)
 
@@ -1519,6 +1560,24 @@ class RecurringContractTest(unittest.TestCase):
               "        elif False and not SPAN.search(found[-1]):")],
         )
         self.assertEqual(without_quote.returncode, 0, without_quote.stderr)
+
+        # The output-membership check is its own guard: without it any reachable
+        # hash reads as history for any class.
+        without_produced = run_mutated_matrix(
+            replace_row(good, "History", f"unchanged, `git log -S{needle}` → `{unrelated}`"),
+            document,
+            [("            if named and sha not in produced:",
+              "            if False and named and sha not in produced:")],
+        )
+        self.assertEqual(without_produced.returncode, 0, without_produced.stderr)
+
+        # And naming no command at all is a separate check.
+        without_command = run_mutated_matrix(
+            replace_row(good, "History", "unchanged → `dbf6c26`"),
+            document,
+            [("        if cited and not named:", "        if False and not named:")],
+        )
+        self.assertEqual(without_command.returncode, 0, without_command.stderr)
 
         without_case = run_mutated_matrix(
             replace_row(
