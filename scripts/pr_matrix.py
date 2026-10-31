@@ -84,6 +84,16 @@ OUTPUT = re.compile(r"\d|\b(OK|passed|failed|refused|denied|in sync|RULE DRIFT|m
 # repeatable or linkable. "passed", "see the matrix above" and "all green"
 # describe a run without letting a reader run or open it.
 URL = re.compile(r"https?://\S+")
+# A line that itself reports a ghost — `absent: \`tests/gone.py\`` — names
+# something on purpose which is not there. Without the marker the section
+# would flag every negative example it cites.
+ABSENT = re.compile(r"\babsent:", re.IGNORECASE)
+# A command the verification cites has to be typeable today: the script or the
+# test file in it must still be there. A moved test and a deleted script read
+# exactly like a passing one.
+PATHLIKE = re.compile(
+    r"(?<![\w./:-])((?:[\w.-]+/)+[\w.-]+|[\w-]+\.(?:py|sh|ya?ml|json|md|txt|toml))"
+)
 # A control is only runnable if the file it names still exists; a `path:symbol`
 # is the protocol's spelling, so both halves are checked.
 # The symbol may start with `@`: Caddy's named matchers are spelled that way,
@@ -243,7 +253,8 @@ def verification_problems(content: str) -> list[str]:
 
     The section is the one place a reader goes to repeat the round, so a word
     that says it happened ("passed", "see above") repeats nothing. Prose about
-    a deployment is still prose; the bullets are the claims.
+    a deployment is still prose; the bullets are the claims. A cited file that
+    is gone is the same shape one step further: the command no longer runs.
     """
     text = unfenced(content)
     names_run = lambda line: bool(URL.search(line)) or any(
@@ -255,7 +266,51 @@ def verification_problems(content: str) -> list[str]:
     for number, line in enumerate(text.splitlines(), start=1):
         if line.lstrip().startswith(("- ", "* ")) and not names_run(line):
             problems.append(f"`## Verification` line {number} names no run: {line.strip()!r}")
+        if not ABSENT.search(line):
+            for issue in reference_issues(line):
+                problems.append(f"`## Verification` line {number}: {issue}")
     return problems
+
+
+def reference_issues(line: str) -> list[str]:
+    """Repository paths a verification line names that no longer run.
+
+    URLs are dropped first, so the host and its path segments are not read as
+    a file. A dotted unittest module is the third spelling of the same thing,
+    and is only converted when its first segment is a directory here.
+    """
+    bare = URL.sub(" ", line)
+    problems = [
+        f"names missing file {path.rstrip('.,;')}"
+        for path in PATHLIKE.findall(bare)
+        if not Path(path.rstrip(".,;")).exists()
+    ]
+    for token in re.findall(r"`([^`]+)`", bare):
+        words = [word.strip("(),.;") for word in token.split()]
+        for word in words:
+            if not re.fullmatch(r"[\w-]+(?:\.[\w-]+)+", word):
+                continue
+            parts = word.split(".")
+            if not Path(parts[0]).is_dir():
+                continue
+            # `tests.test_x.Case.case` — the file is the first segment that is
+            # not a directory, plus `.py`; the rest names a symbol, not a file.
+            cut = next(
+                (index + 1 for index, _ in enumerate(parts) if not Path(
+                    "/".join(parts[:index + 1])).is_dir()),
+                len(parts),
+            )
+            path = "/".join(parts[:cut]) + ".py"
+            if not Path(path).is_file():
+                problems.append(f"names missing file {path}")
+                continue
+            # The file existing is not the run: after `tests.test_x` the rest
+            # of the dotted name is the case, and a renamed case runs nothing.
+            source = Path(path).read_text(encoding="utf-8", errors="replace")
+            for symbol in parts[cut:]:
+                if not re.search(rf"(?<![\w-]){re.escape(symbol)}(?![\w-])", source):
+                    problems.append(f"names {path} with no {symbol}")
+    return sorted(set(problems))
 
 
 def report_problems(body: str) -> list[str]:

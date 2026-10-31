@@ -165,6 +165,12 @@ and the table rows are the ones outside code blocks.
 a command in backticks or links a run. "passed", "see above" and "all green"
 describe a verification without letting anyone re-run or open it.
 
+The command has to still run: a cited script or test file that is gone, and a
+case name that no longer occurs in its file, are reported. A test moved in the
+same PR therefore has to have its verification lines moved with it.
+An example that is *meant* to be absent is marked `absent:` on its line, or the
+check reports the negative case it is demonstrating.
+
 ## Rejection criteria
 
 A round is void and starts over when any of these is true:

@@ -248,6 +248,8 @@ def assert_target_mode_is_actionable(
     case.assertIn("A heading inside a fence is a quotation", found["Report order"])
     case.assertIn("`## Verification` is the section a reader repeats", found["Report order"])
     case.assertIn("names no run", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    case.assertIn("The command has to still run", found["Report order"])
+    case.assertIn("is marked `absent:`", found["Report order"])
     case.assertIn("appears {len(matching)} times", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
 
     # The rejection list is the thing that voids a round; a subset is not one.
@@ -1729,6 +1731,50 @@ class RecurringContractTest(unittest.TestCase):
                     "- https://github.com/webees/uptime-kuma/actions/runs/1 — `conclusion: success`",
                     1,
                 ),
+                document,
+            ).returncode,
+            0,
+        )
+        # And the command in it has to still exist: a moved test file or a
+        # renamed case reads exactly like one that ran.
+        # The name is built from two pieces because the test file is what the
+        # check greps: a literal spelled out here would find itself.
+        absent = "Absent" + "Case.absent_case"
+        self.assertIn(
+            "names missing file tests/gone.py",
+            run_matrix(
+                good.replace(
+                    "- `python3.13 -m unittest tests.test_recurring_gate` — `Ran 32 tests OK`",
+                    "- `python3.13 -m unittest tests/gone.py` — `Ran 3 tests OK`",
+                    1,
+                ),
+                document,
+            ).stderr,
+        )
+        self.assertIn(
+            "names tests/test_recurring_gate.py with no",
+            run_matrix(
+                good.replace(
+                    "- `python3.13 -m unittest tests.test_recurring_gate` — `Ran 32 tests OK`",
+                    "- `python3.13 -m unittest tests.test_recurring_gate."
+                    + absent + "` — `OK`",
+                    1,
+                ),
+                document,
+            ).stderr,
+        )
+        # A verification that cites a negative example names a file it knows is
+        # gone; `absent:` says so, or the section reports its own example.
+        ghost = "- `python3.13 -m unittest tests/gone.py` — `Ran 3 tests OK`"
+        self.assertIn(
+            "names missing file tests/gone.py",
+            run_matrix(
+                good.replace("`Ran 32 tests OK`\n", f"`Ran 32 tests OK`\n{ghost}\n", 1), document
+            ).stderr,
+        )
+        self.assertEqual(
+            run_matrix(
+                good.replace("`Ran 32 tests OK`\n", f"`Ran 32 tests OK`\n- absent: {ghost}\n", 1),
                 document,
             ).returncode,
             0,
