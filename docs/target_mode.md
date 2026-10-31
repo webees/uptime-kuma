@@ -149,6 +149,13 @@ the table in the body is the table that was checked.
 Conclusion, then matrix, then changes, then verification with run URLs and the
 raw `flyctl`/`curl` output, then residuals. No preamble.
 
+Those are five headings — `## Conclusion`, `## Matrix`, `## Changes`,
+`## Verification`, `## Residual` — because a body can satisfy every per-cell
+rule and still be a table alone. `scripts/pr_matrix.py` rejects a missing one,
+the same set arriving in another order, and a `## Verification` with no content
+(reported as `` `## Verification` is empty ``); the last is the heading a rushed
+body leaves behind after the template.
+
 ## Rejection criteria
 
 A round is void and starts over when any of these is true:
