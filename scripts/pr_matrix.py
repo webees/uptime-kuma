@@ -350,6 +350,13 @@ def report_problems(body: str, touched: list[str] | None = None) -> list[str]:
     """
     placed = report_sections(body)
     problems: list[str] = []
+    # "No preamble" is the protocol's first sentence: the conclusion is the
+    # thing a reader opens on. Everything above the first section heading is
+    # therefore an abstract the conclusion has to repeat. Blank lines are not
+    # a preamble — the template starts that way — so only text counts.
+    opening = re.search(r"(?m)^## ", unfenced(body))
+    if opening and body[: opening.start()].strip():
+        problems.append("the body opens with a preamble before `## Conclusion`")
     for name in REPORT:
         matching = [head for head, _ in placed if head == name or head.startswith(f"{name} ")]
         if not matching:

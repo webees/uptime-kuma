@@ -176,6 +176,12 @@ file and the file has to exist. With `--touched`, every changed file also has
 to appear somewhere in the section; "made things better" costs the reader the
 same work as a bullet for a file the PR never touched.
 
+`No preamble` is the first sentence of the order, and it is the only part of it
+that a reader can break without breaking the structure: text above
+`## Conclusion` parses cleanly and still makes the reader read the conclusion
+twice. Any non-blank text before the first `##` heading is reported. A leading
+blank line is not a preamble, because the template starts that way.
+
 ## Rejection criteria
 
 A round is void and starts over when any of these is true:
