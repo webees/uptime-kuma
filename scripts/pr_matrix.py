@@ -361,6 +361,22 @@ def residual_problems(content: str) -> list[str]:
         label = f"`## Residual risk` bullet {number}"
         if not re.search(r"Trigger:", " ".join(block), re.IGNORECASE):
             problems.append(f"{label} names no trigger")
+        else:
+            # The field itself can be empty, and a wrapped value is on the next
+            # line; only the field's own remainder counts towards emptiness.
+            at = next(
+                number for number, line in enumerate(block)
+                if re.search(r"Trigger:", line, re.IGNORECASE)
+            )
+            same_line = re.split(r"Trigger:", block[at], maxsplit=1, flags=re.IGNORECASE)[1]
+            # Stop at the next field: the observation belongs to its own check.
+            rest = [same_line]
+            for line in block[at + 1 :]:
+                if re.search(r"Observed by:", line, re.IGNORECASE):
+                    break
+                rest.append(line)
+            if not " ".join(rest).strip():
+                problems.append(f"{label} names an empty trigger")
         observed = next(
             (line for line in block if re.search(r"Observed by:", line, re.IGNORECASE)), None
         )

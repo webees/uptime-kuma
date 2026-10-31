@@ -207,6 +207,10 @@ alone leaves the reader unable to tell whether it has happened. A round that
 opened none says `none` and names `README.md`, which is where the list lives,
 so "None." cannot hide the registry's contents from a reader.
 
+The fields are checked for content, not presence: `Trigger:` with nothing after
+it reads like a filled field. A value may wrap onto the following lines; the
+field ends at the next `Observed by:`.
+
 ## Rejection criteria
 
 A round is void and starts over when any of these is true:
