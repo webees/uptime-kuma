@@ -39,6 +39,11 @@ COLUMNS = (
 # stated reason: the protocol's word for "not run" is `未验证`.
 UNVERIFIED = re.compile(r"^(未验证|n/a)\b")
 FRONT_MATTER = {"Target-Mode Prompt", "Every-Round Goal Gate"}
+# The protocol fixes the report order, and `docs/target_mode.md:Report order`
+# is where a reader looks for it. A body of nothing but the matrix satisfies
+# every per-cell rule and still leaves the conclusion, the changes, the run
+# output and the residuals out — the four parts the matrix is read *after*.
+REPORT = ("Conclusion", "Matrix", "Changes", "Verification", "Residual")
 SPAN = re.compile(r"`([^`]+)`")
 # `History` and `Mutation control` are prose columns a row can satisfy with a
 # word. History must carry its classification *and* the commit that supports
@@ -193,6 +198,31 @@ def matrix_rows(body: str) -> list[str]:
     if len(rows) < 2:
         raise Unreadable("the matrix has no header")
     return rows
+
+
+def report_problems(body: str) -> list[str]:
+    """The report sections, in order, and the ones that have to hold content."""
+    headings = [head.strip() for head in re.findall(r"(?m)^## (.+)$", body)]
+    problems: list[str] = []
+    for name in REPORT:
+        if name == "Residual":
+            if not any(head.startswith(name) for head in headings):
+                problems.append("the body has no residual section")
+            continue
+        if name not in headings:
+            problems.append(f"the body has no `## {name}` section")
+    ordered = [head for head in headings if head in REPORT or head.startswith("Residual")]
+    rank = lambda head: REPORT.index(head.split()[0])
+    if ordered != sorted(ordered, key=rank):
+        problems.append(
+            f"the report order is {', '.join(REPORT)}, got {', '.join(ordered)}"
+        )
+    for name in ("Verification",):
+        if name in headings:
+            block = body.split(f"\n## {name}\n", 1)[-1].split("\n## ", 1)[0]
+            if not block.strip():
+                problems.append(f"`## {name}` is empty")
+    return problems
 
 
 def authorities(document: str) -> dict[str, list[str]]:
@@ -352,8 +382,9 @@ def check(
     expected = classes(document)
     owned = authorities(document)
     controlled = controls(document)
-    rows = matrix_rows(body)
     problems: list[str] = []
+    problems.extend(report_problems(body))
+    rows = matrix_rows(body)
 
     header = cells(rows[0])
     if tuple(header) != COLUMNS:

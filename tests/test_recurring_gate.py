@@ -234,6 +234,17 @@ def assert_target_mode_is_actionable(
     case.assertIn("a quote with no number", found["Matrix"])
     case.assertIn("Observed result quotes nothing", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
 
+    # The report order was prose only, so a body of nothing but the matrix
+    # passed: no conclusion, no changes, no run output, no residuals. The five
+    # headings are one list in the checker and in the protocol, in order, and
+    # the empty verification is the shape the template leaves behind.
+    case.assertIn(
+        'REPORT = ("Conclusion", "Matrix", "Changes", "Verification", "Residual")',
+        (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"),
+    )
+    case.assertIn("the same set arriving in another order", found["Report order"])
+    case.assertIn("`## Verification` is empty", found["Report order"])
+
     # The rejection list is the thing that voids a round; a subset is not one.
     for clause in ("a matrix column or row is missing",
                    "no control turned red",
@@ -274,7 +285,62 @@ def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
         f"`{authority_control(document, title)}` | {result} |"
         for title in target_classes(document)
     )
-    return f"## Conclusion\n\nx\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n|{'---|' * len(TARGET_MODE_COLUMNS)}\n{rows}\n\n## Changes\n\nx\n"
+    return (
+        f"## Conclusion\n\nx\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n"
+        f"|{'---|' * len(TARGET_MODE_COLUMNS)}\n{rows}\n\n## Changes\n\nx\n\n"
+        f"## Verification\n\n- `python3.13 -m unittest tests.test_recurring_gate` — `Ran 32 tests OK`\n\n"
+        f"## Residual risk\n\nNone opened.\n"
+    )
+
+
+def body_sections(body: str) -> dict[str, str]:
+    """Split a body into `## Heading` blocks, in the order they appear.
+
+    Named apart from `sections()` because that one is the document splitter
+    `assert_recurrence_contract` uses; a second `sections` would shadow it and
+    turn the class list of every document into the headings of a PR body.
+    """
+    found: dict[str, str] = {}
+    parts = body.split("\n## ")
+    if parts[0].strip():
+        head, _, rest = parts[0].partition("\n")
+        found[head.lstrip("# ").strip()] = rest
+    for part in parts[1:]:
+        head, _, rest = part.partition("\n")
+        found[head.strip()] = rest
+    return found
+
+
+def without_section(body: str, name: str) -> str:
+    """The body with one `## name` block removed."""
+    head = f"\n## {name}\n"
+    assert head in body, name
+    before, _, rest = body.partition(head)
+    _, _, after = rest.partition("\n## ")
+    return before + ("\n## " + after if after else "")
+
+
+def only_matrix(body: str) -> str:
+    """A body of nothing but the matrix section."""
+    return "## Matrix\n" + body_sections(body)["Matrix"]
+
+
+def empty_section(body: str, name: str) -> str:
+    """A body where one section keeps its heading and loses its content."""
+    head = f"\n## {name}\n"
+    content = body_sections(body)[name]
+    return body.replace(head + content, head + "\n", 1)
+
+
+def swap_sections(body: str, first: str, second: str) -> str:
+    """A body with two `##` blocks in the other order."""
+    parts = body_sections(body)
+    order = ["Conclusion", "Matrix", "Changes", "Verification", "Residual risk"]
+    # Both indices before either write: after the first swap the second name
+    # may sit where the first one was.
+    left, right = order.index(first), order.index(second)
+    order[left], order[right] = second, first
+    return "\n".join(f"## {name}\n{parts[name]}" for name in order)
 
 
 def dangling_commit() -> str:
@@ -1533,6 +1599,30 @@ class RecurringContractTest(unittest.TestCase):
             0,
         )
 
+        # The report order is in the protocol and nowhere in the checker, so a
+        # body can be a matrix alone: the conclusion, the changes, the
+        # verification and the residuals are the parts a reader needs first.
+        self.assertIn("has no `## Conclusion`", run_matrix(only_matrix(good), document).stderr)
+        self.assertIn("has no `## Changes`", run_matrix(without_section(good, "Changes"), document).stderr)
+        self.assertIn(
+            "has no `## Verification`", run_matrix(without_section(good, "Verification"), document).stderr
+        )
+        self.assertIn(
+            "has no residual section", run_matrix(without_section(good, "Residual risk"), document).stderr
+        )
+        # Order matters as much as presence: a verification before the matrix
+        # reads as a result nobody has the class for yet.
+        self.assertIn(
+            "the report order is",
+            run_matrix(swap_sections(good, "Matrix", "Changes"), document).stderr,
+        )
+        # A section heading with nothing under it is the shape a rushed body
+        # leaves after the template; the verification also has to carry a
+        # command, not just a heading.
+        self.assertIn(
+            "`## Verification` is empty", run_matrix(empty_section(good, "Verification"), document).stderr
+        )
+
         # History names a `git log` command. Until now the command was never
         # run: any reachable hash passed, related to the class or not. The
         # command is the claim, so the hashes have to be its output.
@@ -1845,7 +1935,13 @@ class RecurringContractTest(unittest.TestCase):
         self.assertIn("no `## Matrix`", run_matrix("## Changes\n", document).stderr)
 
         # A body that opens with the matrix is legal and must still be checked.
-        self.assertEqual(run_matrix(good.split("## Matrix", 1)[1].join(["## Matrix", ""]), document).returncode, 0)
+        # The section is found even without a leading newline, so the only
+        # complaint left is that the conclusion now sits after it.
+        opening = good.split("\n## Matrix\n", 1)
+        matrix_first = "## Matrix\n" + opening[1] + "\n## Conclusion\n" + opening[0]
+        found = run_matrix(matrix_first, document).stderr
+        self.assertNotIn("has no `## Matrix`", found)
+        self.assertIn("the report order is", found)
 
     def test_matrix_step_reads_the_pull_request_body(self) -> None:
         validate = workflow("validate.yml")
