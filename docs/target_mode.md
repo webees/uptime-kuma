@@ -152,9 +152,10 @@ raw `flyctl`/`curl` output, then residuals. No preamble.
 Those are five headings — `## Conclusion`, `## Matrix`, `## Changes`,
 `## Verification`, `## Residual` — because a body can satisfy every per-cell
 rule and still be a table alone. `scripts/pr_matrix.py` rejects a missing one,
-the same set arriving in another order, and a `## Verification` with no content
-(reported as `` `## Verification` is empty ``); the last is the heading a rushed
-body leaves behind after the template.
+the same set arriving in another order, a heading written twice, and any of the
+five left with no content. A heading is a promise to write under it: the empty
+`## Verification` is what the template leaves behind, and an empty conclusion or
+residual is the same shape one section over.
 
 ## Rejection criteria
 
