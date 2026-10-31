@@ -382,8 +382,16 @@ def residual_problems(content: str) -> list[str]:
         )
         if observed is None:
             problems.append(f"{label} names no observation")
-        elif not (URL.search(observed) or any(COMMAND.search(span) for span in SPAN.findall(observed))):
-            problems.append(f"{label} observation names no command")
+        else:
+            # The field is empty as soon as nothing follows its colon, on that
+            # line or a wrapped one; a value is then still checked for a run.
+            at = block.index(observed)
+            same_line = re.split(r"Observed by:", observed, maxsplit=1, flags=re.IGNORECASE)[1]
+            value = " ".join([same_line, *block[at + 1 :]]).strip()
+            if not value:
+                problems.append(f"{label} names an empty observation")
+            elif not (URL.search(value) or any(COMMAND.search(span) for span in SPAN.findall(value))):
+                problems.append(f"{label} observation names no command")
     for issue in reference_issues(text):
         problems.append(f"`## Residual risk`: {issue}")
     return problems

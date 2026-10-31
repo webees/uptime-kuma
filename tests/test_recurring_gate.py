@@ -1857,6 +1857,15 @@ class RecurringContractTest(unittest.TestCase):
             run_matrix(good.replace("None opened; the recorded ones live in `README.md`.", wrapped, 1), document).returncode,
             0,
         )
+        # The observation field has the same hole: an empty `Observed by:`
+        # follows a correct `Trigger:` and still reads as filled.
+        empty_observation = (
+            "- the deploy might fail\n  Trigger: a hand deploy.\n  Observed by:"
+        )
+        self.assertIn(
+            "names an empty observation",
+            broken(good.replace("None opened; the recorded ones live in `README.md`.", empty_observation, 1)),
+        )
         trigger_only = "- the deploy might fail\n  Trigger: a hand deploy.\n  Observed by: somebody."
         self.assertIn(
             "observation names no command",
@@ -2327,6 +2336,25 @@ class RecurringContractTest(unittest.TestCase):
                 document,
                 [('            if not " ".join(rest).strip():',
                   '            if False and not " ".join(rest).strip():')],
+            ).returncode,
+            0,
+        )
+
+        # Mutation control 12: the empty observation. Without the read the
+        # field exists and the command check has nothing to look at.
+        self.assertEqual(
+            run_mutated_matrix(
+                good.replace(
+                    "None opened; the recorded ones live in `README.md`.",
+                    "- the deploy might fail\n  Trigger: a hand deploy.\n  Observed by:",
+                    1,
+                ),
+                document,
+                # The empty value falls through to the command check, which
+                # also has nothing to look at, so both reads go together.
+                [("            if not value:", "            if False:"),
+                 ("            elif not (URL.search(value)",
+                  "            elif False and not (URL.search(value)")],
             ).returncode,
             0,
         )
