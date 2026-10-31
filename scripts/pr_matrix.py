@@ -49,6 +49,9 @@ RUNNABLE = re.compile(r"`[^`]+`|\btests?/[^\s:]+:")
 # A control is only runnable if the file it names still exists; a `path:symbol`
 # is the protocol's spelling, so both halves are checked.
 REFERENCE = re.compile(r"`([\w./-]+):(\w[\w.-]*)`")
+# The three evidence columns are prose the protocol says must name the command
+# that ran. "yes" and "ran" are the shapes that read like proof without one.
+EVIDENCE = ("Positive", "Boundary", "Negative")
 
 
 class Unreadable(Exception):
@@ -210,6 +213,29 @@ def guard_problems(title: str, guard: str, recorded: list[str]) -> list[str]:
     return problems
 
 
+def reference_problems(title: str, column: str, text: str) -> list[str]:
+    """One problem per backticked `path:symbol` that cannot be run today.
+
+    A named file that is gone is a command nobody can type, and a symbol that
+    was renamed away is a command that runs nothing.
+    """
+    problems: list[str] = []
+    for path, symbol in REFERENCE.findall(text):
+        file = Path(path)
+        if not file.is_file():
+            problems.append(
+                f"{title!r} {column} names missing file {path}"
+            )
+        elif not re.search(
+            rf"(?<![\w-]){re.escape(symbol)}(?![\w-])",
+            file.read_text(encoding="utf-8", errors="replace"),
+        ):
+            problems.append(
+                f"{title!r} {column} names {symbol!r}, which is not in {path}"
+            )
+    return problems
+
+
 def check(
     body: str,
     document: str,
@@ -276,20 +302,21 @@ def check(
             )
         # The control has to be runnable: a named file that is gone is a
         # command nobody can type.
-        for path, symbol in REFERENCE.findall(control):
-            if not Path(path).is_file():
+        for problem in reference_problems(title, "Mutation control", control):
+            problems.append(f"line {number}: {problem}")
+        # The three evidence columns must name a run, not describe one.
+        for column in EVIDENCE:
+            text = found[COLUMNS.index(column)]
+            if not text:
+                continue
+            if not RUNNABLE.search(text):
                 problems.append(
-                    f"line {number}: {title!r} Mutation control names missing "
-                    f"file {path}"
+                    f"line {number}: {title!r} {column} names nothing "
+                    f"runnable: {text!r}"
                 )
-            elif not re.search(
-                rf"(?<![\w-]){re.escape(symbol)}(?![\w-])",
-                Path(path).read_text(encoding="utf-8", errors="replace"),
-            ):
-                problems.append(
-                    f"line {number}: {title!r} Mutation control names "
-                    f"{symbol!r}, which is not in {path}"
-                )
+                continue
+            for problem in reference_problems(title, column, text):
+                problems.append(f"line {number}: {problem}")
         guard = found[COLUMNS.index("Authoritative guard")]
         if guard:
             for problem in guard_problems(title, guard, owned.get(title, [])):

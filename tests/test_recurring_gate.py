@@ -205,7 +205,7 @@ def assert_target_mode_is_actionable(
     # History and Mutation control are references, not free prose: a ghost
     # hash or a deleted case reads exactly like proof.
     case.assertIn("which is not a commit", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
-    case.assertIn("Mutation control names missing", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    case.assertIn("names missing file", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     # A commit that resolves is not enough: after a squash merge the branch
     # commit is gone from `main`, so the row must cite something reachable.
     case.assertIn("reachable from HEAD, so only the clone", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
@@ -213,6 +213,10 @@ def assert_target_mode_is_actionable(
     case.assertIn("`git cat-file` cannot resolve", found["Matrix"])
     case.assertIn("not reachable from\n  `HEAD`", found["Matrix"])
     case.assertIn("deleted file or a deleted case", found["Matrix"])
+    # The three evidence columns are prose the same way: a word describes a run
+    # without letting anyone repeat it.
+    case.assertIn("EVIDENCE = (\"Positive\", \"Boundary\", \"Negative\")", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
+    case.assertIn("rejects a cell that names no run at all", found["Matrix"])
 
     # The rejection list is the thing that voids a round; a subset is not one.
     for clause in ("a matrix column or row is missing",
@@ -247,8 +251,11 @@ def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
     """A body whose matrix is fully filled, for parser tests."""
     rows = "\n".join(
         f"| {title} | unchanged, `git log -Gx` → `dbf6c26` | "
-        f"`{authority_guard(document, title)}` | ran | "
-        f"ran | ran | `tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body` | {result} |"
+        f"`{authority_guard(document, title)}` | "
+        f"`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body` | "
+        f"`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body` | "
+        f"`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body` | "
+        f"`tests/test_recurring_gate.py:test_matrix_parser_reads_a_real_body` | {result} |"
         for title in target_classes(document)
     )
     return f"## Conclusion\n\nx\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n|{'---|' * len(TARGET_MODE_COLUMNS)}\n{rows}\n\n## Changes\n\nx\n"
@@ -1234,6 +1241,7 @@ class RecurringContractTest(unittest.TestCase):
 
         # Mutation control 2: a row with an empty evidence cell.
         emptied = good.replace("| ran | ran | ran |", "| ran |  | ran |", 1)
+        emptied = replace_cells(emptied, "Boundary", lambda title: "")
         self.assertNotEqual(emptied, good)
         self.assertIn("leaves Boundary empty", broken(emptied))
 
@@ -1423,6 +1431,28 @@ class RecurringContractTest(unittest.TestCase):
             0,
         )
 
+        # The three evidence columns are prose too: "ran", "yes" and "ok" read
+        # like proof without naming anything a reader can re-run.
+        for column in ("Positive", "Boundary", "Negative"):
+            vague = broken(replace_row(good, column, "yes"))
+            self.assertIn(f"{column} names nothing runnable", vague)
+        # Naming a run only helps if the run can still be found.
+        self.assertIn(
+            "Positive names missing file tests/gone.py",
+            broken(replace_row(good, "Positive", "`tests/gone.py:case`")),
+        )
+        self.assertIn(
+            # Split, so the assertion text does not satisfy the check itself.
+            f"names '{'test_' + 'deleted_long_ago'}', which is not in",
+            broken(
+                replace_row(
+                    good,
+                    "Negative",
+                    "`tests/test_recurring_gate.py:{}`".format("test_" + "deleted_long_ago"),
+                )
+            ),
+        )
+
         # Mutation controls, one per column: each check is what turns its
         # words back into evidence, so dropping it lets that row pass again.
         vague_history = replace_row(good, "History", "n/a")
@@ -1461,7 +1491,7 @@ class RecurringContractTest(unittest.TestCase):
                 "`tests/test_recurring_gate.py:{}`".format("test_" + "deleted_long_ago"),
             ),
             document,
-            [('            elif not re.search(', '            elif False and not re.search(')],
+            [('        elif not re.search(', '        elif False and not re.search(')],
         )
         self.assertEqual(without_case.returncode, 0, without_case.stderr)
 
@@ -1470,10 +1500,28 @@ class RecurringContractTest(unittest.TestCase):
         without_existing = run_mutated_matrix(
             replace_row(good, "Mutation control", "`tests/gone.py:case`"),
             document,
-            [("            if not Path(path).is_file():",
-              "            if False and not Path(path).is_file():")],
+            [("        if not file.is_file():",
+              "        if False and not file.is_file():")],
         )
         self.assertEqual(without_existing.returncode, 2)
+
+        # The evidence columns get their own controls: one blanks the check
+        # that a run was even named, the other only the lookup behind it, so a
+        # deleted file stops being noticed while `yes` still passes.
+        without_naming = run_mutated_matrix(
+            replace_row(good, "Negative", "yes"),
+            document,
+            [("            if not RUNNABLE.search(text):",
+              "            if False and not RUNNABLE.search(text):")],
+        )
+        self.assertEqual(without_naming.returncode, 0, without_naming.stderr)
+        without_lookup = run_mutated_matrix(
+            replace_row(good, "Boundary", "`tests/gone.py:case`"),
+            document,
+            [('        for problem in reference_problems(title, column, text):',
+              '        for problem in []:')],
+        )
+        self.assertEqual(without_lookup.returncode, 0, without_lookup.stderr)
 
         vague_control = replace_row(good, "Mutation control", "n/a")
         without_control = run_mutated_matrix(

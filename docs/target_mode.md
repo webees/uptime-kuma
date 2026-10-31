@@ -106,7 +106,10 @@ One row per class, always these eight columns, in this order:
   symbol on a shared file, and a symbol that no longer occurs in that file. Two
   guards for one invariant means it is still fragmented.
 - `Positive`, `Boundary` and `Negative` each name the command or test that was
-  run, and the row is only filled once that ran.
+  run, and the row is only filled once that ran. A backticked `path:symbol`
+  must still resolve here too: "ran", "yes" and "ok" describe a run without
+  letting a reader repeat it, and a test that was since deleted repeats nothing.
+  `validate` rejects a cell that names no run at all.
 - `Mutation control` names the runnable test or command in backticks and states
   what changed when the guard was removed. "5 controls" is a count, not a
   location; a control that stays green proves nothing. A backticked
