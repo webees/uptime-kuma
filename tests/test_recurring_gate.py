@@ -298,7 +298,7 @@ def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
         f"## Conclusion\n\nx\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n"
         f"|{'---|' * len(TARGET_MODE_COLUMNS)}\n{rows}\n\n## Changes\n\nx\n\n"
         f"## Verification\n\n- `python3.13 -m unittest tests.test_recurring_gate` — `Ran 32 tests OK`\n\n"
-        f"## Residual risk\n\nNone opened.\n"
+        f"## Residual risk\n\nNone opened; the recorded ones live in `README.md`.\n"
     )
 
 
@@ -1797,6 +1797,50 @@ class RecurringContractTest(unittest.TestCase):
         # `## Changes` is the list a reviewer maps onto the diff. "x" and "made
         # things better" named nothing, and a bullet for a file outside the PR
         # read the same as one of its changes.
+        # A residual outlives the round, so it is the section a later reader
+        # comes back for. Until now it only had to be non-empty: `None.` passed,
+        # and so did a bullet saying the deploy might fail, which says neither
+        # when it fires nor how to see it.
+        self.assertIn(
+            "`## Residual risk` is prose with no `none` claim",
+            broken(good.replace("None opened; the recorded ones live in `README.md`.", "Later.", 1)),
+        )
+        self.assertIn(
+            "does not name README.md",
+            broken(good.replace("; the recorded ones live in `README.md`.", ".", 1)),
+        )
+        vague_residual = "- the deploy might fail"
+        self.assertIn(
+            "names no trigger",
+            broken(good.replace("None opened; the recorded ones live in `README.md`.", vague_residual, 1)),
+        )
+        trigger_only = "- the deploy might fail\n  Trigger: a hand deploy.\n  Observed by: somebody."
+        self.assertIn(
+            "observation names no command",
+            broken(good.replace("None opened; the recorded ones live in `README.md`.", trigger_only, 1)),
+        )
+        observed = (
+            "- the deploy might fail\n  Trigger: a hand deploy.\n"
+            "  Observed by: `gh run list --branch main`."
+        )
+        self.assertEqual(
+            run_matrix(good.replace("None opened; the recorded ones live in `README.md`.", observed, 1), document).returncode,
+            0,
+        )
+        self.assertIn(
+            "names missing file scripts/gone.py",
+            broken(
+                good.replace(
+                    "None opened; the recorded ones live in `README.md`.",
+                    observed.replace(
+                        "Observed by: `gh run list --branch main`.",
+                        "Observed by: `python3.13 scripts/gone.py`.",
+                    ),
+                    1,
+                )
+            ),
+        )
+
         self.assertIn(
             "`## Changes` line 3 names no file",
             run_matrix(good.replace("## Changes\n\nx", "## Changes\n\n- made things better", 1), document).stderr,
@@ -2141,6 +2185,37 @@ class RecurringContractTest(unittest.TestCase):
             ).returncode,
             0,
         )
+
+        # Mutation control 7: the residual fields. Without the read a bare
+        # `None.` and an unfalsifiable bullet both pass again.
+        self.assertIn(
+            "names no observation",
+            run_matrix(
+                good.replace(
+                    "None opened; the recorded ones live in `README.md`.",
+                    "- the deploy might fail\n  Trigger: a hand deploy.",
+                    1,
+                ),
+                document,
+            ).stderr,
+        )
+        for body in (
+            good.replace("None opened; the recorded ones live in `README.md`.", "None.", 1),
+            good.replace(
+                "None opened; the recorded ones live in `README.md`.",
+                "- the deploy might fail\n  Trigger: a hand deploy.",
+                1,
+            ),
+        ):
+            self.assertEqual(
+                run_mutated_matrix(
+                    body,
+                    document,
+                    [('            elif name == "Residual":',
+                      '            elif False and name == "Residual":')],
+                ).returncode,
+                0,
+            )
 
         # A body that opens with the matrix is legal and must still be checked.
         # The section is found even without a leading newline, so the only

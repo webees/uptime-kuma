@@ -313,6 +313,49 @@ def reference_issues(line: str) -> list[str]:
     return sorted(set(problems))
 
 
+def residual_problems(content: str) -> list[str]:
+    """Every open residual names when it fires and how it would be seen.
+
+    A residual outlives the round it was written in, so it is the section a
+    later reader comes back for. Being non-empty is not enough: `None.` reads as
+    a closed list with no way to check, and "the deploy might fail" says
+    neither when it fires nor how anyone would notice. The registry in
+    `README.md` is the one place a residual may live, so a body that claims
+    none has to name it.
+    """
+    text = unfenced(content)
+    problems: list[str] = []
+    claims_none = re.search(r"\bnone\b", text, re.IGNORECASE)
+    if claims_none:
+        if "README.md" not in text:
+            problems.append("`## Residual risk` does not name README.md, where they are kept")
+        return problems
+    # A bullet owns its continuation lines, which is where the two fields sit.
+    blocks: list[list[str]] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith(("- ", "* ")):
+            blocks.append([line])
+        elif blocks and line.strip():
+            blocks[-1].append(line)
+    if not blocks:
+        problems.append("`## Residual risk` is prose with no `none` claim")
+        return problems
+    for number, block in enumerate(blocks, start=1):
+        label = f"`## Residual risk` bullet {number}"
+        if not re.search(r"Trigger:", " ".join(block), re.IGNORECASE):
+            problems.append(f"{label} names no trigger")
+        observed = next(
+            (line for line in block if re.search(r"Observed by:", line, re.IGNORECASE)), None
+        )
+        if observed is None:
+            problems.append(f"{label} names no observation")
+        elif not (URL.search(observed) or any(COMMAND.search(span) for span in SPAN.findall(observed))):
+            problems.append(f"{label} observation names no command")
+    for issue in reference_issues(text):
+        problems.append(f"`## Residual risk`: {issue}")
+    return problems
+
+
 def changes_problems(content: str, touched: list[str] | None) -> list[str]:
     """Every change bullet names a file that exists, and the diff is covered.
 
@@ -374,6 +417,8 @@ def report_problems(body: str, touched: list[str] | None = None) -> list[str]:
                 problems.extend(verification_problems(content))
             elif name == "Changes":
                 problems.extend(changes_problems(content, touched))
+            elif name == "Residual":
+                problems.extend(residual_problems(content))
     # One entry per section: a duplicate is already named above, and counting it
     # again here would report the same heading twice as an order problem too.
     ordered = list(
