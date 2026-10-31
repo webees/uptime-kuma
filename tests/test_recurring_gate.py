@@ -225,10 +225,12 @@ def assert_target_mode_is_actionable(
     # without letting anyone repeat it.
     case.assertIn("EVIDENCE = (\"Positive\", \"Boundary\", \"Negative\")", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("rejects a cell that names no run at all", found["Matrix"])
+    case.assertIn("backticks are not evidence", found["Matrix"])
     # A guard file of directives is not runnable and a bare `ok` quotes nothing,
     # so the protocol has to say both.
     case.assertIn("is directives, so a control pointing there", found["Matrix"])
     case.assertIn("quote, so `ok` alone does", found["Matrix"])
+    case.assertIn("a quote with no number", found["Matrix"])
     case.assertIn("Observed result quotes nothing", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
 
     # The rejection list is the thing that voids a round; a subset is not one.
@@ -1479,6 +1481,31 @@ class RecurringContractTest(unittest.TestCase):
             broken(replace_row(good, "Observed result", "ok")),
         )
 
+        # Backticks are the whole runnable test: `` yes `` and `` ok `` passed
+        # because a span existed, not because it named a command. All three
+        # evidence columns and both output columns now have to carry a command
+        # word or a `path:symbol` inside the span.
+        self.assertIn(
+            "names no command",
+            broken(replace_row(good, "Positive", "`yes`")),
+        )
+        self.assertIn(
+            "names no command",
+            broken(replace_row(good, "Boundary", "`n/a`")),
+        )
+        self.assertIn(
+            "names no command",
+            broken(replace_row(good, "Negative", "`ok`")),
+        )
+        self.assertIn(
+            "names no command",
+            broken(replace_row(good, "Mutation control", "`fine`")),
+        )
+        self.assertIn(
+            "quotes no output",
+            broken(replace_row(good, "Observed result", "`ok`")),
+        )
+
         # History names a `git log` command. Until now the command was never
         # run: any reachable hash passed, related to the class or not. The
         # command is the claim, so the hashes have to be its output.
@@ -1586,18 +1613,27 @@ class RecurringContractTest(unittest.TestCase):
         without_directive = run_mutated_matrix(
             replace_row(good, "Mutation control", "`config/Caddyfile:@denied`"),
             document,
-            [("    if any(", "    if False and any(")],
+            [("    if directives:", "    if False and directives:")],
         )
         self.assertEqual(without_directive.returncode, 0, without_directive.stderr)
 
-        # And the observation: blanking the quote requirement makes `ok` proof.
+        # The observation has two separate guards and they are isolated: a
+        # bare `31 ok` is output without a span, a backticked `ok` is a span
+        # without output, and blanking one guard lets exactly one through.
         without_quote = run_mutated_matrix(
-            replace_row(good, "Observed result", "ok"),
+            replace_row(good, "Observed result", "31 ok"),
             document,
             [("        elif found[-1] and not UNVERIFIED.match(found[-1]) and not SPAN.search(found[-1]):",
               "        elif False and not SPAN.search(found[-1]):")],
         )
         self.assertEqual(without_quote.returncode, 0, without_quote.stderr)
+        without_output = run_mutated_matrix(
+            replace_row(good, "Observed result", "`ok`"),
+            document,
+            [("        elif found[-1] and not UNVERIFIED.match(found[-1]) and not OUTPUT.search(found[-1]):",
+              "        elif False and not OUTPUT.search(found[-1]):")],
+        )
+        self.assertEqual(without_output.returncode, 0, without_output.stderr)
 
         # The output-membership check is its own guard: without it any reachable
         # hash reads as history for any class.
@@ -1687,15 +1723,15 @@ class RecurringContractTest(unittest.TestCase):
         without_naming = run_mutated_matrix(
             replace_row(good, "Negative", "yes"),
             document,
-            [("            if not RUNNABLE.search(text):",
-              "            if False and not RUNNABLE.search(text):")],
+            [("    if not RUNNABLE.search(text):",
+              "    if False and not RUNNABLE.search(text):")],
         )
         self.assertEqual(without_naming.returncode, 0, without_naming.stderr)
         without_lookup = run_mutated_matrix(
             replace_row(good, "Boundary", "`tests/gone.py:case`"),
             document,
-            [('        for problem in reference_problems(title, column, text):',
-              '        for problem in []:')],
+            [("    problems.extend(reference_problems(title, column, text))",
+              "    problems.extend([])")],
         )
         self.assertEqual(without_lookup.returncode, 0, without_lookup.stderr)
 
@@ -1703,8 +1739,8 @@ class RecurringContractTest(unittest.TestCase):
         without_control = run_mutated_matrix(
             vague_control,
             document,
-            [("        if control and not RUNNABLE.search(control):",
-              "        if False and not RUNNABLE.search(control):")],
+            [("    if not RUNNABLE.search(text):\n        return [",
+              "    if False and not RUNNABLE.search(text):\n        return [")],
         )
         self.assertEqual(without_control.returncode, 0, without_control.stderr)
 
