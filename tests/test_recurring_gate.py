@@ -1546,6 +1546,21 @@ class RecurringContractTest(unittest.TestCase):
         for column in ("Positive", "Boundary", "Negative"):
             vague = broken(replace_row(good, column, "yes"))
             self.assertIn(f"{column} names nothing runnable", vague)
+            # An empty span is the same gesture one character further: the
+            # backticks are there, the run is not.
+            self.assertIn(
+                f"{column} names nothing runnable",
+                broken(replace_row(good, column, "` `")),
+            )
+            self.assertEqual(
+                run_mutated_matrix(
+                    replace_row(good, column, "` `"),
+                    document,
+                    [("RUNNABLE = re.compile(r\"`[^`]*\\S[^`]*`|\\btests?/[^\\s:]+:\")",
+                      "RUNNABLE = re.compile(r\"`[^`]+`|\\btests?/[^\\s:]+:\")")],
+                ).returncode,
+                0,
+            )
         # Naming a run only helps if the run can still be found.
         self.assertIn(
             "Positive names missing file tests/gone.py",
