@@ -46,8 +46,22 @@ SPAN = re.compile(r"`([^`]+)`")
 HISTORY = re.compile(r"\b(never fixed|never established|regressed|unchanged|partial(?:ly)?|not established)\b")
 COMMIT = re.compile(r"\b[0-9a-f]{7,40}\b")
 # History names the command that produced its evidence: `git log -Sx` or
-# `git log -Gx`. The needle may hold `@` (a Caddy matcher) or `.`/`-`.
-LOG = re.compile(r"git log -(S|G)`?([\w@.-]+)")
+# `git log -Gx`. The needle is taken whole — to the closing backtick, quotes
+# and all — because re-running a truncated prefix searches a wider set than the
+# row claims: a hash that search never reported would read as the output of the
+# command that was quoted. A needle may therefore hold `/` (a path), `@` (a
+# Caddy matcher) or a space (a phrase). Where the command is not backticked the
+# `→` that introduces the commits ends it.
+LOG = re.compile(r"git log -(S|G)`?([^`\n→]*)")
+
+
+def search(history: str) -> tuple[str, str] | None:
+    """The `-S`/`-G` flag and needle a History cell names, quotes removed."""
+    found = LOG.search(history)
+    if found is None:
+        return None
+    needle = found.group(2).strip().strip("'\"").strip()
+    return found.group(1), needle
 RUNNABLE = re.compile(r"`[^`]+`|\btests?/[^\s:]+:")
 # A control is only runnable if the file it names still exists; a `path:symbol`
 # is the protocol's spelling, so both halves are checked.
@@ -324,7 +338,7 @@ def check(
             )
         # A hash that does not resolve is worse than none: it reads as proof.
         cited = COMMIT.findall(history)
-        named = LOG.search(history)
+        named = search(history)
         if cited and not named:
             problems.append(
                 f"line {number}: {title!r} History names no `git log` command, "
@@ -332,12 +346,12 @@ def check(
             )
         # A hash is only evidence of *this* class if the named command reported
         # it; any reachable commit would otherwise read as history.
-        produced = log_output(named.group(1), named.group(2)) if named else set()
+        produced = log_output(*named) if named else set()
         for sha in cited:
             if named and sha not in produced:
                 problems.append(
                     f"line {number}: {title!r} History cites {sha}, which is not "
-                    f"in the output of `git log -{named.group(1)}{named.group(2)}`"
+                    f"in the output of `git log -{named[0]}{named[1]}`"
                 )
         gone = unresolved(cited)
         alive = [sha for sha in cited if sha not in gone]
