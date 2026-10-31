@@ -182,6 +182,12 @@ file and the file has to exist. With `--touched`, every changed file also has
 to appear somewhere in the section; "made things better" costs the reader the
 same work as a bullet for a file the PR never touched.
 
+The mapping runs the other way too: with `--touched`, a bullet naming a file the
+pull request did not change is reported. Such a bullet reads as a change the
+reviewer looks for in the diff and never finds, which is the same cost as an
+omitted one. `--touched` is only known on the pull request path, so a local run
+without it keeps the looser check.
+
 `No preamble` is the first sentence of the order, and it is the only part of it
 that a reader can break without breaking the structure: text above
 `## Conclusion` parses cleanly and still makes the reader read the conclusion

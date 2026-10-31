@@ -1880,6 +1880,16 @@ class RecurringContractTest(unittest.TestCase):
             run_matrix(partial, document, ["docs/target_mode.md"]).stderr,
         )
         self.assertEqual(run_matrix(partial, document, ["scripts/pr_matrix.py"]).returncode, 0)
+        # And the other direction: a bullet for a file the PR never touched is
+        # a change the reviewer hunts for in the diff and does not find.
+        self.assertIn(
+            "line 3 names a file the PR did not change: README.md",
+            run_matrix(
+                good.replace("## Changes\n\nx", "## Changes\n\n- `README.md`: rewritten", 1),
+                document,
+                ["scripts/pr_matrix.py"],
+            ).stderr,
+        )
 
         # History names a `git log` command. Until now the command was never
         # run: any reachable hash passed, related to the class or not. The
@@ -2205,6 +2215,28 @@ class RecurringContractTest(unittest.TestCase):
                 document,
                 [('    if opening and body[: opening.start()].strip():',
                   '    if False and opening and body[: opening.start()].strip():')],
+            ).returncode,
+            0,
+        )
+
+        # Mutation control 9: a bullet for a file outside the diff. Without the
+        # read the list can name a change the diff does not contain.
+        both_bullets = good.replace(
+            "## Changes\n\nx",
+            "## Changes\n\n- `scripts/pr_matrix.py`: added\n- `README.md`: rewritten",
+            1,
+        )
+        self.assertIn(
+            "names a file the PR did not change",
+            run_matrix(both_bullets, document, ["scripts/pr_matrix.py"]).stderr,
+        )
+        self.assertEqual(
+            run_mutated_matrix(
+                both_bullets,
+                document,
+                [('                if Path(path).exists() and path not in touched:',
+                  '                if False and path not in touched:')],
+                ["scripts/pr_matrix.py"],
             ).returncode,
             0,
         )

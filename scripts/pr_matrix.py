@@ -397,6 +397,13 @@ def changes_problems(content: str, touched: list[str] | None) -> list[str]:
         for path in touched:
             if path not in named:
                 problems.append(f"`## Changes` does not name the touched file {path}")
+        for number, line in enumerate(text.splitlines(), start=1):
+            if not line.lstrip().startswith(("- ", "* ")):
+                continue
+            for path in PATHLIKE.findall(URL.sub(" ", line)):
+                path = path.rstrip(".,;")
+                if Path(path).exists() and path not in touched:
+                    problems.append(f"`## Changes` line {number} names a file the PR did not change: {path}")
     return problems
 
 
