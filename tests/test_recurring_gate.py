@@ -217,6 +217,11 @@ def assert_target_mode_is_actionable(
     # without letting anyone repeat it.
     case.assertIn("EVIDENCE = (\"Positive\", \"Boundary\", \"Negative\")", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
     case.assertIn("rejects a cell that names no run at all", found["Matrix"])
+    # A guard file of directives is not runnable and a bare `ok` quotes nothing,
+    # so the protocol has to say both.
+    case.assertIn("is directives, so a control pointing there", found["Matrix"])
+    case.assertIn("quote, so `ok` alone does", found["Matrix"])
+    case.assertIn("Observed result quotes nothing", (ROOT / "scripts/pr_matrix.py").read_text(encoding="utf-8"))
 
     # The rejection list is the thing that voids a round; a subset is not one.
     for clause in ("a matrix column or row is missing",
@@ -1453,6 +1458,19 @@ class RecurringContractTest(unittest.TestCase):
             ),
         )
 
+        # A control and an observation are the last two shapes that still read
+        # as proof: pointing a control at a Caddyfile directive is a real file
+        # nobody can run, and `ok` says an observation exists without quoting
+        # one.
+        self.assertIn(
+            "Mutation control is a bare directive",
+            broken(replace_row(good, "Mutation control", "`config/Caddyfile:@denied`")),
+        )
+        self.assertIn(
+            "Observed result quotes nothing",
+            broken(replace_row(good, "Observed result", "ok")),
+        )
+
         # Mutation controls, one per column: each check is what turns its
         # words back into evidence, so dropping it lets that row pass again.
         vague_history = replace_row(good, "History", "n/a")
@@ -1483,6 +1501,24 @@ class RecurringContractTest(unittest.TestCase):
             [("        stale = set(unreachable(alive))", "        stale = set()")],
         )
         self.assertEqual(without_reach.returncode, 0, without_reach.stderr)
+
+        # The control column got the same treatment; dropping the directive
+        # rule lets a Caddy matcher stand in for a runnable test.
+        without_directive = run_mutated_matrix(
+            replace_row(good, "Mutation control", "`config/Caddyfile:@denied`"),
+            document,
+            [("    if any(", "    if False and any(")],
+        )
+        self.assertEqual(without_directive.returncode, 0, without_directive.stderr)
+
+        # And the observation: blanking the quote requirement makes `ok` proof.
+        without_quote = run_mutated_matrix(
+            replace_row(good, "Observed result", "ok"),
+            document,
+            [("        elif found[-1] and not UNVERIFIED.match(found[-1]) and not SPAN.search(found[-1]):",
+              "        elif False and not SPAN.search(found[-1]):")],
+        )
+        self.assertEqual(without_quote.returncode, 0, without_quote.stderr)
 
         without_case = run_mutated_matrix(
             replace_row(
