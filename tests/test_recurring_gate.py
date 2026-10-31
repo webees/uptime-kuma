@@ -295,7 +295,7 @@ def complete_body(document: str, *, result: str = "`Ran 56 tests OK`") -> str:
         for title in target_classes(document)
     )
     return (
-        f"## Conclusion\n\nx\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n"
+        f"## Conclusion\n\n`scripts/pr_matrix.py` reads the report order.\n\n## Matrix\n\n| {' | '.join(TARGET_MODE_COLUMNS)} |\n"
         f"|{'---|' * len(TARGET_MODE_COLUMNS)}\n{rows}\n\n## Changes\n\nx\n\n"
         f"## Verification\n\n- `python3.13 -m unittest tests.test_recurring_gate` — `Ran 32 tests OK`\n\n"
         f"## Residual risk\n\nNone opened; the recorded ones live in `README.md`.\n"
@@ -1801,6 +1801,29 @@ class RecurringContractTest(unittest.TestCase):
         # comes back for. Until now it only had to be non-empty: `None.` passed,
         # and so did a bullet saying the deploy might fail, which says neither
         # when it fires nor how to see it.
+        # The conclusion is the first thing read and the last thing checked: `x`
+        # passed it. It stays prose — "why" cannot be resolved against a tree —
+        # but it has to point at something a reader can open.
+        self.assertIn(
+            "`## Conclusion` names nothing checkable",
+            broken(good.replace("## Conclusion\n\n`scripts/pr_matrix.py` reads the report order.", "## Conclusion\n\nIt is better now.", 1)),
+        )
+        self.assertEqual(
+            run_matrix(
+                good.replace(
+                    "## Conclusion\n\n`scripts/pr_matrix.py` reads the report order.",
+                    "## Conclusion\n\n`scripts/pr_matrix.py` used to accept `x`. "
+                    "`report_problems()` now requires a reference.",
+                    1,
+                ),
+                document,
+            ).returncode,
+            0,
+        )
+        self.assertIn(
+            "`## Conclusion`: names missing file scripts/gone.py",
+            broken(good.replace("## Conclusion\n\n`scripts/pr_matrix.py` reads the report order.", "## Conclusion\n\nSee `scripts/gone.py`.", 1)),
+        )
         self.assertIn(
             "`## Residual risk` is prose with no `none` claim",
             broken(good.replace("None opened; the recorded ones live in `README.md`.", "Later.", 1)),
@@ -2213,6 +2236,28 @@ class RecurringContractTest(unittest.TestCase):
                     document,
                     [('            elif name == "Residual":',
                       '            elif False and name == "Residual":')],
+                ).returncode,
+                0,
+            )
+
+        # Mutation control 8: the conclusion read. Without it `x` and any bare
+        # sentence pass, and a ghost path in the conclusion is not resolved.
+        for body in (
+            good.replace(
+                "`scripts/pr_matrix.py` reads the report order.", "It is better now.", 1
+            ),
+            good.replace(
+                "`scripts/pr_matrix.py` reads the report order.",
+                "See `scripts/gone.py`.",
+                1,
+            ),
+        ):
+            self.assertEqual(
+                run_mutated_matrix(
+                    body,
+                    document,
+                    [('            elif name == "Conclusion":',
+                      '            elif False and name == "Conclusion":')],
                 ).returncode,
                 0,
             )

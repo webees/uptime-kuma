@@ -313,6 +313,23 @@ def reference_issues(line: str) -> list[str]:
     return sorted(set(problems))
 
 
+def conclusion_problems(content: str) -> list[str]:
+    """The conclusion stays prose but has to point at something checkable.
+
+    "Why" cannot be resolved against a tree, so the section keeps its free
+    form — `x` was the shape that passed with nothing to open. A reference is
+    the smallest thing that lets the next reader start from the conclusion
+    instead of the diff, and it is checked like every other one.
+    """
+    text = unfenced(content)
+    problems: list[str] = []
+    if not (URL.search(text) or PATHLIKE.search(text) or SPAN.search(text)):
+        problems.append("`## Conclusion` names nothing checkable")
+    for issue in reference_issues(text):
+        problems.append(f"`## Conclusion`: {issue}")
+    return problems
+
+
 def residual_problems(content: str) -> list[str]:
     """Every open residual names when it fires and how it would be seen.
 
@@ -417,6 +434,8 @@ def report_problems(body: str, touched: list[str] | None = None) -> list[str]:
                 problems.extend(verification_problems(content))
             elif name == "Changes":
                 problems.extend(changes_problems(content, touched))
+            elif name == "Conclusion":
+                problems.extend(conclusion_problems(content))
             elif name == "Residual":
                 problems.extend(residual_problems(content))
     # One entry per section: a duplicate is already named above, and counting it
