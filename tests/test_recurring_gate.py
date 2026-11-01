@@ -3062,8 +3062,11 @@ class RecurringContractTest(unittest.TestCase):
         # Mutation control: one floating tag is enough to fail, and the message
         # must name the offending line so the fix is mechanical.
         name = "ghcr.yaml"
+        pinned = re.search(r"actions/checkout@[0-9a-f]{40}", workflows[name])
+        self.assertIsNotNone(pinned)
+        assert pinned is not None
         weakened = {**workflows, name: workflows[name].replace(
-            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262", "actions/checkout@v4", 1
+            pinned.group(0), "actions/checkout@v4", 1
         )}
         self.assertNotEqual(weakened[name], workflows[name])
         with self.assertRaises(AssertionError) as caught:
@@ -3072,9 +3075,13 @@ class RecurringContractTest(unittest.TestCase):
 
         # Second control: keep the pin but delete its version comment. The SHA
         # alone is still immutable, so only the readability rule can catch it.
+        labelled = re.search(
+            rf"{re.escape(pinned.group(0))} # [^\n]+", workflows[name]
+        )
+        self.assertIsNotNone(labelled)
+        assert labelled is not None
         unlabelled = {**workflows, name: workflows[name].replace(
-            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4",
-            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262", 1,
+            labelled.group(0), pinned.group(0), 1,
         )}
         self.assertNotEqual(unlabelled[name], workflows[name])
         self.assertEqual(unpinned_uses(unlabelled[name]), [])
@@ -3517,7 +3524,7 @@ class RecurringContractTest(unittest.TestCase):
             self.assertIn("supercronic_sha_arm64", renamed.stderr)
 
     def test_schedule_checker_fails_closed(self) -> None:
-        """Disabled, stale, malformed, and future schedules are not healthy."""
+        """Only a real schedule change starts grace for an unscheduled workflow."""
         path = ROOT / "scripts/check_schedules.py"
         spec = importlib.util.spec_from_file_location("check_schedules", path)
         self.assertIsNotNone(spec)
@@ -3527,6 +3534,17 @@ class RecurringContractTest(unittest.TestCase):
 
         now = module.datetime(2026, 11, 1, 12, tzinfo=module.timezone.utc)
         original = module.fetch_json
+        original_patch_guard = module.patch_changes_schedule
+        workflow_path = ".github/workflows/ghcr.yaml"
+        schedule_sha = "a" * 40
+        docs_sha = "b" * 40
+        recent = "2026-11-01T10:00:00Z"
+        metadata = {
+            "state": "active",
+            "created_at": "2025-01-01T00:00:00Z",
+            "updated_at": "2025-07-21T04:57:28+07:00",
+        }
+        fresh_metadata = dict(metadata, updated_at=recent)
         try:
             def healthy(url: str) -> dict:
                 if "/runs?" in url:
@@ -3552,17 +3570,76 @@ class RecurringContractTest(unittest.TestCase):
             with self.assertRaises(module.Refused):
                 module.check_workflow("owner/repo", "ghcr.yaml", 48, now, "https://api.example")
 
-            def newly_scheduled(url: str) -> dict:
+            def newly_scheduled(
+                url: str,
+                schedule_changed: bool = True,
+                workflow_metadata: dict = metadata,
+            ) -> dict:
                 if "/runs?" in url:
                     return {"workflow_runs": []}
-                return {
-                    "state": "active",
-                    "created_at": "2025-01-01T00:00:00Z",
-                    "updated_at": "2026-11-01T10:00:00Z",
-                }
+                if "/commits?" in url:
+                    return [
+                        {
+                            "sha": docs_sha,
+                            "commit": {"committer": {"date": recent}},
+                        },
+                        {
+                            "sha": schedule_sha,
+                            "commit": {"committer": {"date": recent}},
+                        },
+                    ]
+                if url.endswith(f"/commits/{schedule_sha}") and schedule_changed:
+                    return {
+                        "files": [
+                            {
+                                "filename": workflow_path,
+                                "patch": "@@ -1 +1 @@\n+    - cron: '17 3 * * 1'",
+                            }
+                        ]
+                    }
+                if url.endswith((f"/commits/{schedule_sha}", f"/commits/{docs_sha}")):
+                    return {
+                        "files": [
+                            {
+                                "filename": workflow_path,
+                                "patch": "@@ -1 +1 @@\n+Documentation only",
+                            }
+                        ]
+                    }
+                return workflow_metadata
 
             module.fetch_json = newly_scheduled
             module.check_workflow("owner/repo", "ghcr.yaml", 48, now, "https://api.example")
+            self.assertTrue(module.patch_changes_schedule("+  schedule:\n+    - cron: '17 3 * * 1'"))
+            self.assertTrue(module.patch_changes_schedule("-    - cron: 'old'"))
+            self.assertFalse(module.patch_changes_schedule("+README.md only"))
+
+            # Mutation control: without patch classification, the stale workflow
+            # metadata no longer identifies the recent cron change and the
+            # previously healthy onboarding case must turn red.
+            module.patch_changes_schedule = lambda patch: False
+            with self.assertRaises(module.Refused):
+                module.check_workflow("owner/repo", "ghcr.yaml", 48, now, "https://api.example")
+            module.patch_changes_schedule = original_patch_guard
+
+            # Recent, unrelated metadata and a documentation commit cannot
+            # restart grace when no schedule-changing commit exists.
+            module.fetch_json = lambda url: newly_scheduled(
+                url, schedule_changed=False, workflow_metadata=fresh_metadata
+            )
+            with self.assertRaisesRegex(module.Refused, "no schedule-changing commit"):
+                module.check_workflow("owner/repo", "ghcr.yaml", 48, now, "https://api.example")
+
+            def malformed_history(url: str) -> object:
+                if "/runs?" in url:
+                    return {"workflow_runs": []}
+                if "/commits?" in url:
+                    return {}
+                return metadata
+
+            module.fetch_json = malformed_history
+            with self.assertRaises(module.Refused):
+                module.check_workflow("owner/repo", "ghcr.yaml", 48, now, "https://api.example")
 
             def future(url: str) -> dict:
                 if "/runs?" in url:
@@ -3574,6 +3651,7 @@ class RecurringContractTest(unittest.TestCase):
                 module.check_workflow("owner/repo", "ghcr.yaml", 48, now, "https://api.example")
         finally:
             module.fetch_json = original
+            module.patch_changes_schedule = original_patch_guard
 
         self.assertEqual(module.parse_spec("upstream-updates.yml=48"),
                          ("upstream-updates.yml", 48))
