@@ -370,7 +370,77 @@ restore_test() {
         return 2
     fi
     sqlite_check "Restored database check" "$restored" || return 2
-    echo "Restore drill complete: ${restored} is a consistent database"
+    verify_restored_app "$restored" "$target" || return 2
+    echo "Restore drill complete: ${restored} starts Uptime Kuma and answers /"
+}
+
+# Stop the isolated application without leaving a process behind. The app can
+# ignore TERM while closing SQLite, so bound the grace period and then kill.
+stop_restored_app() {
+    local pid="$1"
+    kill -TERM "$pid" 2>/dev/null || :
+    for _ in $(seq 1 20); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill -KILL "$pid" 2>/dev/null || :
+    wait "$pid" 2>/dev/null || :
+}
+
+# Prove the restored database can boot the application, not merely pass
+# integrity_check. The copy is isolated and every monitor is deactivated before
+# launch so the drill cannot execute checks or emit notifications from restored
+# production state. A 302 from / proves the application loaded an initialized
+# database; a setup page or a process exit fails the drill.
+verify_restored_app() {
+    local restored="$1" target="$2"
+    local app_dir="$target/app-check"
+    local app_db="$app_dir/kuma.db" log="$target/app-check.log"
+    local port=3012 pid="" code="" rc=0
+    rm -rf -- "$app_dir" "$log" || {
+        echo "Error: cannot clear the isolated app check" >&2
+        return 2
+    }
+    mkdir -p -- "$app_dir" || {
+        echo "Error: cannot create the isolated app data directory" >&2
+        return 2
+    }
+    cp -- "$restored" "$app_db" || {
+        echo "Error: cannot copy the restored database for the app check" >&2
+        return 2
+    }
+    if ! sqlite3 "$app_db" 'UPDATE monitor SET active = 0;' >/dev/null 2>&1; then
+        echo "Error: restored database cannot deactivate monitors for a safe boot" >&2
+        rm -rf -- "$app_dir"
+        return 2
+    fi
+
+    (
+        cd /app || exit 2
+        exec env DATA_DIR="$app_dir" node server/server.js --port="$port"
+    ) >"$log" 2>&1 &
+    pid=$!
+    for _ in $(seq 1 60); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            wait "$pid" 2>/dev/null || rc=$?
+            echo "Error: restored application exited before answering / (exit ${rc})" >&2
+            rm -rf -- "$app_dir" "$log"
+            return 2
+        fi
+        code="$(curl --silent --show-error --max-time 1 --output /dev/null \
+            --write-out '%{http_code}' "http://127.0.0.1:${port}/" 2>/dev/null)" || code=000
+        if [ "$code" = 302 ]; then
+            stop_restored_app "$pid"
+            rm -rf -- "$app_dir" "$log"
+            echo "Restore app check: / returned HTTP 302"
+            return 0
+        fi
+        sleep 0.5
+    done
+    echo "Error: restored application did not answer / with 302 within 30s" >&2
+    stop_restored_app "$pid"
+    rm -rf -- "$app_dir" "$log"
+    return 2
 }
 
 # In-place restore: explicit confirmation, a regular live file, and a staging
