@@ -121,7 +121,24 @@ def stack(image: str, delay: str = "0.2", source: Path | None = None) -> str:
 
 
 def pids(container: str, process: str) -> list[int]:
-    result = docker("exec", container, "pidof", process, check=False)
+    # Uptime Kuma 2.5.9 sets Node's process.title to "uptime-kuma", so pidof
+    # can no longer match the executable by its original name. Scan comm
+    # instead; it is the supervisor-visible identity and works under qemu too.
+    names = ("node", "uptime-kuma") if process == "node" else (process,)
+    script = """
+for comm in /proc/[0-9]*/comm; do
+    [ -r "$comm" ] || continue
+    name=$(cat "$comm" 2>/dev/null) || continue
+    for target in "$@"; do
+        if [ "$name" = "$target" ]; then
+            pid=${comm#/proc/}
+            printf '%s\\n' "${pid%/comm}"
+            break
+        fi
+    done
+done
+"""
+    result = docker("exec", container, "sh", "-c", script, "sh", *names, check=False)
     return [int(value) for value in result.stdout.split() if value.isdigit()]
 
 

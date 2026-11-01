@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `bc68f25` on 2026-11-01,
-extending the previous baseline at `9c2e1d1`. Every later round must extend that
+Audit baseline: every commit reachable through `07ed144` on 2026-11-01,
+extending the previous baseline at `bc68f25`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
