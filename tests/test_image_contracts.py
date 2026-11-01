@@ -77,6 +77,46 @@ class ImageContractTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_hidden_lock_metadata_matches_installed_packages(self) -> None:
+        script = r'''
+const fs = require("fs");
+const lock = require("/app/node_modules/.package-lock.json");
+const watched = new Set([
+  "brace-expansion", "picomatch", "ip-address", "pacote", "sigstore", "tar"
+]);
+const entries = [];
+for (const [path, locked] of Object.entries(lock.packages || {})) {
+  const name = locked.name || path.split("node_modules/").pop();
+  if (!watched.has(name)) continue;
+  const manifestPath = `/app/${path}/package.json`;
+  const installed = fs.existsSync(manifestPath)
+    ? JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+    : null;
+  entries.push({
+    name,
+    lockedVersion: locked.version,
+    installedVersion: installed?.version ?? null,
+    installedName: installed?.name ?? null,
+    path,
+  });
+}
+process.stdout.write(JSON.stringify(entries));
+'''
+        result = docker(
+            "run", "--rm", "--entrypoint", "node", IMAGE, "-e", script,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entries = json.loads(result.stdout)
+        self.assertTrue(entries, "the watched runtime packages disappeared from the lock")
+        for entry in entries:
+            with self.subTest(package=entry["name"], path=entry["path"]):
+                self.assertEqual(entry["installedName"], entry["name"])
+                self.assertEqual(entry["installedVersion"], entry["lockedVersion"])
+        self.assertTrue(
+            {entry["name"] for entry in entries} >= {"brace-expansion", "ip-address", "tar"},
+            "the contract no longer exercises known installed runtime packages",
+        )
+
     def test_npm_is_build_time_only(self) -> None:
         result = docker(
             "run", "--rm", "--entrypoint", "bash", IMAGE, "-c",

@@ -355,7 +355,7 @@ lockfile and package-shipped historical lockfiles, then deletes
 `node_modules/.package-lock.json` stays because it records the installed tree;
 the application dependencies and that metadata remain loadable. On 2026-11-01,
 Trivy 0.70.0 reported `Node.js: 0` and the actionable gate exited `0` for
-`uptime-kuma:security-test-v7`; the Debian 12.15 result remained 354 HIGH and
+`uptime-kuma:security-test-v3`; the Debian 12.15 result remained 354 HIGH and
 18 CRITICAL, all unfixed and explicitly retained in the full SARIF inventory.
 
 The publish workflow also carries one weekly `schedule`, so a base-image or

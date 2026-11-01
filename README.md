@@ -332,7 +332,7 @@ python3.13 scripts/upstream_deps.py compare --uptime-version … --uptime-digest
   retained in SARIF, while deployment is blocked only for findings with an
   available upgrade. Trigger: the inherited Debian packages have empty
   `FixedVersion` values. Observed by: Trivy 0.70.0 on 2026-11-01 scanned
-  `uptime-kuma:security-test-v7`, found `fixable=0`, and the actionable gate
+  `uptime-kuma:security-test-v3`, found `fixable=0`, and the actionable gate
   exited `0`.
 
 ## 📝 License
