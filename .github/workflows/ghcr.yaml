@@ -108,6 +108,7 @@ jobs:
   # Nothing is published from a commit that failed its own gates.
   validate:
     uses: ./.github/workflows/validate.yml
+    secrets: inherit
     # A called workflow cannot grant itself more than the caller holds: asking
     # for `pull-requests: read` inside validate.yml made every publish die with
     # `startup_failure` (run 41080321915) while the PR-only run stayed green.

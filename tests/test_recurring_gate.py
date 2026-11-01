@@ -468,6 +468,14 @@ def assert_caller_grants_the_called_permissions(
     caller = build.split("\n  validate:\n", 1)
     case.assertEqual(len(caller), 2, "the publish workflow has no validate job")
     job = caller[1].split("\n  build:", 1)[0]
+    # Repository secrets are not inherited by a called workflow implicitly. The
+    # validate failure notifier therefore sees an empty ALERT_WEBHOOK_URL on
+    # every publish unless the caller explicitly passes the repository secret.
+    case.assertIn(
+        "    secrets: inherit\n",
+        job,
+        "the caller does not pass repository secrets to validate.yml",
+    )
     block = permissions_block(job)
     case.assertTrue(block, f"the calling job grants nothing, so {sorted(wanted)} cannot be held")
     have = set(re.findall(r"(?m)^      ([a-z-]+): \S+$", block))
@@ -2839,6 +2847,14 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(narrowed, build)
         with self.assertRaises(AssertionError):
             assert_caller_grants_the_called_permissions(self, narrowed, validate)
+
+        # Third control: permissions are granted but secrets are not inherited,
+        # so the nested validate can run while its failure notifier stays dark.
+        secrets_lost = build.replace("    secrets: inherit\n", "", 1)
+        self.assertNotEqual(secrets_lost, build)
+        with self.assertRaises(AssertionError) as caught:
+            assert_caller_grants_the_called_permissions(self, secrets_lost, validate)
+        self.assertIn("repository secrets", str(caught.exception))
 
         # Mutation control: a step that checks a checked-out file instead of the
         # API body lets the PR carry a table nobody read. Both reads are API
