@@ -3062,8 +3062,11 @@ class RecurringContractTest(unittest.TestCase):
         # Mutation control: one floating tag is enough to fail, and the message
         # must name the offending line so the fix is mechanical.
         name = "ghcr.yaml"
+        pinned = re.search(r"actions/checkout@[0-9a-f]{40}", workflows[name])
+        self.assertIsNotNone(pinned)
+        assert pinned is not None
         weakened = {**workflows, name: workflows[name].replace(
-            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262", "actions/checkout@v4", 1
+            pinned.group(0), "actions/checkout@v4", 1
         )}
         self.assertNotEqual(weakened[name], workflows[name])
         with self.assertRaises(AssertionError) as caught:
@@ -3072,9 +3075,13 @@ class RecurringContractTest(unittest.TestCase):
 
         # Second control: keep the pin but delete its version comment. The SHA
         # alone is still immutable, so only the readability rule can catch it.
+        labelled = re.search(
+            rf"{re.escape(pinned.group(0))} # [^\n]+", workflows[name]
+        )
+        self.assertIsNotNone(labelled)
+        assert labelled is not None
         unlabelled = {**workflows, name: workflows[name].replace(
-            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4",
-            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262", 1,
+            labelled.group(0), pinned.group(0), 1,
         )}
         self.assertNotEqual(unlabelled[name], workflows[name])
         self.assertEqual(unpinned_uses(unlabelled[name]), [])
