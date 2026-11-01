@@ -260,7 +260,10 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: 🛡️ Scan the published digest for HIGH and CRITICAL vulnerabilities
+      # Preserve the complete finding set for code scanning and review. This
+      # pass is intentionally non-blocking because Debian currently carries
+      # HIGH/CRITICAL advisories with no fixed package available.
+      - name: 🧾 Inventory all HIGH and CRITICAL vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
@@ -268,10 +271,25 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           severity: HIGH,CRITICAL
-          exit-code: '1'
+          exit-code: '0'
           ignore-unfixed: 'false'
           vuln-type: os,library
           limit-severities-for-sarif: 'true'
+          timeout: 10m0s
+
+      # Deployment is blocked only when an available upgrade can remove the
+      # finding. Unfixed base-image advisories remain visible in the full SARIF
+      # report above instead of making every build permanently red.
+      - name: 🛡️ Block on fixable HIGH and CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
+          scan-type: image
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: 'true'
+          vuln-type: os,library
           timeout: 10m0s
 
       - name: 🧭 Upload vulnerability results to code scanning

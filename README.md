@@ -94,11 +94,19 @@ fly deploy --image ghcr.io/webees/uptime-kuma@sha256:<digest>
 
 `ghcr.yaml` runs `validate` first, pushes a `build-<run>-<attempt>` tag, records
 the amd64 manifest digest, smoke-tests that digest, and scans the same digest
-with Trivy. HIGH or CRITICAL findings block the deploy. The scan also produces a
-CycloneDX SBOM artifact named from that digest, plus SARIF results in code
-scanning. Only after both gates pass is the digest sent to Fly. Deployment
+with Trivy. A complete HIGH/CRITICAL inventory is retained as SARIF in code
+scanning; a second pass blocks deployment on findings that have a published
+fixed version. The scan also produces a CycloneDX SBOM artifact named from that
+digest. Only after both gates pass is the digest sent to Fly. Deployment
 verification fails unless the latest release is complete, every machine runs
 that digest, and its health check is passing.
+
+The runtime installs its pinned application dependencies with npm during the
+build, then removes the generated root lockfile, package-shipped historical
+lockfiles, and `npm`/`npx` themselves. The hidden
+`node_modules/.package-lock.json` remains because it describes the installed
+tree; it is not a build recipe. This keeps scanner results and runtime tools
+limited to what the application actually ships.
 
 Only after that verification passes is that exact index promoted to `latest`
 and re-read to prove both the index and its amd64 child still match. A failed,
@@ -319,6 +327,13 @@ python3.13 scripts/upstream_deps.py compare --uptime-version … --uptime-digest
   is delivered; the failed run remains the only signal. Trigger: the repository
   secret is absent. Observed by: `gh secret list` returning no
   `ALERT_WEBHOOK_URL` entry.
+- The hardened runtime image still reports 354 HIGH and 18 CRITICAL Debian
+  12.15 findings, all without a published fixed package. The complete result is
+  retained in SARIF, while deployment is blocked only for findings with an
+  available upgrade. Trigger: the inherited Debian packages have empty
+  `FixedVersion` values. Observed by: Trivy 0.70.0 on 2026-11-01 scanned
+  `uptime-kuma:security-test-v7`, found `fixable=0`, and the actionable gate
+  exited `0`.
 
 ## 📝 License
 
