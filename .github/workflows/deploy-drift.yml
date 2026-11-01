@@ -91,6 +91,29 @@ jobs:
           python3 scripts/deploy_drift.py \
             "$out/releases.json" "$out/status.json" "$out/latest.json"
 
+      # Fly's machine check is answered by Caddy, not by Uptime Kuma. Probe the
+      # application path too so a healthy proxy cannot hide a dead backend.
+      - name: 🌐 Probe the public application
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/drift"
+          host="$(jq -r '.Hostname // empty' "$out/status.json")"
+          test -n "$host"
+          base="https://${host}"
+
+          health="$(curl --silent --show-error --max-time 20 \
+            --output /dev/null --write-out '%{http_code}' "${base}/health")"
+          test "$health" = 200
+
+          root="$(curl --silent --show-error --max-time 20 \
+            --dump-header "$out/root.headers" --output /dev/null \
+            --write-out '%{http_code}' "${base}/")"
+          test "$root" = 302
+          location="$(awk 'tolower($1) == "location:" { sub(/^[^:]+:[[:space:]]*/, ""); print }' \
+            "$out/root.headers" | tail -n 1 | tr -d '\r')"
+          test "$location" = /dashboard
+          echo "public app: /health=${health}, / ${root} to ${location}"
+
       - name: 🚨 Notify drift failure
         if: always() && (failure() || cancelled())
         uses: ./.github/actions/notify-failure
@@ -101,4 +124,4 @@ jobs:
           branch: ${{ github.ref_name }}
           commit: ${{ github.sha }}
           conclusion: ${{ job.status }}
-          reason: Production no longer matches the promoted image or the drift check could not read it.
+          reason: Production no longer matches the promoted image, the application probe failed, or the drift check could not read it.
