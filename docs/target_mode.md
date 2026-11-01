@@ -11,6 +11,12 @@ reference for shape, never a source of truth about this project. Facts come from
 the worktree, the workflows and the live application, not from an earlier
 summary.
 
+The mutable round brief lives in `NEXT_PROMPT.md` at the repository root. It is
+the only prompt artifact: read it at the start of every round, then overwrite it
+in place with the verified state, remaining work and approval boundaries before
+reporting completion. Do not append, create numbered variants, or repeat its
+body in chat. `阅读这个文件，并执行` means execute that file.
+
 ## Hard rules
 
 - Answer in Chinese; commit messages, PR titles and PR bodies in English.
@@ -18,6 +24,8 @@ summary.
 - Create and edit files with `apply_patch` only. Shell may read, build, test and
   run `git`.
 - Never `git reset --hard`. Leave unrelated files alone.
+- Keep `NEXT_PROMPT.md` current by replacing its contents, never by appending a
+  new round beside it.
 - Tests run through `python3.13 -m unittest`. There is no `pytest`.
 - A green `validate` is not a deployment. After a merge, `deploy` is proven by
   the verification step and by re-reading `flyctl releases`/`status` with the
