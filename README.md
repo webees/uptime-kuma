@@ -93,9 +93,12 @@ fly deploy --image ghcr.io/webees/uptime-kuma@sha256:<digest>
 ```
 
 `ghcr.yaml` runs `validate` first, pushes a `build-<run>-<attempt>` tag, records
-the amd64 manifest digest, smoke-tests that digest, and only then deploys it.
-Deployment verification fails unless the latest release is complete, every
-machine runs that digest, and its health check is passing.
+the amd64 manifest digest, smoke-tests that digest, and scans the same digest
+with Trivy. HIGH or CRITICAL findings block the deploy. The scan also produces a
+CycloneDX SBOM artifact named from that digest, plus SARIF results in code
+scanning. Only after both gates pass is the digest sent to Fly. Deployment
+verification fails unless the latest release is complete, every machine runs
+that digest, and its health check is passing.
 
 Only after that verification passes is that exact index promoted to `latest`
 and re-read to prove both the index and its amd64 child still match. A failed,
@@ -241,7 +244,7 @@ Six workflows run without a human, and Dependabot updates the action pins:
 | :--- | :--- | :--- |
 | `upstream-updates.yml` | daily `02:23` UTC | resolves the newest stable Uptime Kuma release, its image digest and the supercronic binaries, rewrites only those five `Dockerfile` pins, opens `deps/upstream`, runs `validate` on that branch, then merges and dispatches the publish chain |
 | `dependabot-automerge.yml` | when Dependabot opens or refreshes a PR | accepts only same-Action SHA/comment replacements, waits for the required `validate` check, then merges the action update directly |
-| `ghcr.yaml` | weekly `Mon 03:17` UTC, plus every push | probes the published image for pending OS packages, builds only when there is something to ship, smoke-tests the digest, deploys it to Fly, verifies the release and only then moves `latest` |
+| `ghcr.yaml` | weekly `Mon 03:17` UTC, plus every push | probes the published image for pending OS packages, builds only when there is something to ship, smoke-tests and scans the digest, records its SBOM, deploys it to Fly, verifies the release and only then moves `latest` |
 | `deploy-drift.yml` | after every publish, daily `05:41` UTC | fails when production is not running the digest `latest` was promoted from |
 | `ghcr-cleanup.yml` | daily `03:00` UTC, plus every push | prunes untagged and stale tags without racing a publish |
 | `automation-health.yml` | daily `05:47` UTC, plus watched workflow completions | fails on a failed main-branch workflow and checks that every scheduled workflow is still active and recent |

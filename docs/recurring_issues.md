@@ -328,6 +328,18 @@ Builds publish provenance attestations. They land in the same index as
 OS and requires exactly one match; the deploy image therefore stays a real
 linux/amd64 image manifest, never an attestation.
 
+Vulnerability and inventory history: the build was smoke-tested and deployed
+after validation, but nothing inspected the image it was about to run and no
+SBOM was retained. Final decision: `scan` consumes the exact amd64 manifest
+digest recorded by `build`, generates a CycloneDX SBOM for that digest, scans
+the same digest for HIGH and CRITICAL findings, and fails on either an
+unfixed-or-fixable vulnerability or malformed output. The SBOM artifact is named
+from the digest and carries `sbom-image.txt`, so it cannot be silently attached
+to a different image. SARIF is uploaded to code scanning, and `deploy` needs
+both `build` and `scan`; a failed or skipped scanner therefore cannot deploy.
+Manual dispatches may exercise this path on a feature branch, but deployment
+stays restricted to `main`.
+
 The publish workflow also carries one weekly `schedule`, so a base-image or
 OS-package fix can ship without a code change. Scheduled runs use `main` HEAD
 and traverse the same validate -> build -> deploy chain.
@@ -451,6 +463,9 @@ The recorded branch rule is `docs/branch_protection.json`, read by
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
 `tests/test_recurring_gate.py:test_latest_is_promoted_only_after_verification`;
+`tests/test_recurring_gate.py:test_published_digest_is_scanned_and_sbom_bound`
+replaces the digest with `latest`, turns Trivy into report-only, and removes the
+scan dependency independently;
 `tests/test_recurring_gate.py:test_scheduled_rebuild_requires_package_drift`
 executes the probe against fake `docker` output;
 `tests/test_recurring_gate.py:test_upstream_updates_are_scheduled_and_gated`
@@ -508,6 +523,10 @@ asset name away from the pinned version.
 Regression gate: the digest check rejects a mutable image, a tampered binary
 fails the build, the deploy job needs `build` which needs `validate`, the
 published digest is the amd64 manifest, and the history scan stays clean. The
+scan gate requires the build digest for both SBOM generation and Trivy, rejects
+a mutable tag, requires HIGH/CRITICAL to exit non-zero, and makes `deploy` wait
+for `scan`; each mutation turns its control red. A manual dispatch on a feature
+branch can run the scan without unlocking a non-main deploy. The
 recorded app name matches the README and every `-a` in the deploy job, and
 renaming it in one place, or documenting the deploy token for another app,
 fails. The two verifier filters are executed

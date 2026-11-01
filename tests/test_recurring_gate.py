@@ -983,6 +983,47 @@ def assert_digest_names_one_image_manifest(case: unittest.TestCase, build: str) 
     case.assertIn('[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]', step)
 
 
+def assert_digest_scan_and_sbom_gate(case: unittest.TestCase, build: str) -> None:
+    """Deployment is downstream of a scan and SBOM of the exact digest."""
+    scan = build.split("\n  scan:\n", 1)[1].split("\n  deploy:\n", 1)[0]
+    digest_ref = "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}"
+
+    case.assertIn("    needs: build\n", scan)
+    case.assertRegex(scan, r"(?m)^    if: github\.event_name != 'pull_request'$")
+    permissions = scan.split("    permissions:\n", 1)[1].split("    steps:\n", 1)[0]
+    case.assertIn("packages: read", permissions)
+    case.assertIn("security-events: write", permissions)
+
+    # Both the SBOM and the scanner consume the immutable amd64 manifest. A
+    # mutable tag would scan a different artifact than the one that deploys.
+    case.assertEqual(scan.count(digest_ref), 2, "both scans must name the build digest")
+    case.assertNotIn(":latest", scan)
+    case.assertIn("anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c", scan)
+    case.assertIn("format: cyclonedx-json", scan)
+    case.assertIn("output-file: sbom.cdx.json", scan)
+    case.assertIn("syft-version: v1.55.0", scan)
+    case.assertIn("aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25", scan)
+    case.assertIn("severity: HIGH,CRITICAL", scan)
+    case.assertIn("exit-code: '1'", scan)
+    case.assertIn("ignore-unfixed: 'false'", scan)
+    case.assertIn("format: sarif", scan)
+    case.assertIn("output: trivy-results.sarif", scan)
+    case.assertIn("github/codeql-action/upload-sarif@b20883b0cd1f46c72ae0ba6d1090936928f9fa30", scan)
+    case.assertIn("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", scan)
+    case.assertIn('digest_name="${DIGEST//:/-}"', scan)
+    case.assertIn("name: sbom-${{ steps.image.outputs.digest_name }}", scan)
+    case.assertIn("sbom-image.txt", scan)
+
+    # A successful scan is a job dependency, not an advisory annotation.
+    case.assertIn("\n  deploy:\n    needs: [build, scan]\n", build)
+    case.assertIn(
+        "  deploy:\n    needs: [build, scan]\n"
+        "    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'\n",
+        build,
+    )
+    case.assertIn("needs: [rebuild_check, validate, build, scan, deploy]", build)
+
+
 def schedule_entries(text: str) -> list[str]:
     """Return the `cron:` values declared under the top-level `on:` key."""
     head = text.split("\nenv:", 1)[0]
@@ -3215,6 +3256,51 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError) as caught:
             assert_actions_are_pinned(self, unlabelled)
         self.assertIn("no version comment", str(caught.exception))
+
+    def test_published_digest_is_scanned_and_sbom_bound(self) -> None:
+        build = workflow("ghcr.yaml")
+        assert_digest_scan_and_sbom_gate(self, build)
+
+        # Mutation control: scanning a mutable tag would leave the deployed
+        # digest unscanned even though the job stayed green.
+        digest_ref = "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}"
+        mutable = build.replace(digest_ref, "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest")
+        self.assertNotEqual(mutable, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, mutable)
+
+        # Mutation control: a report-only scanner never blocks deployment.
+        advisory = build.replace("exit-code: '1'", "exit-code: '0'", 1)
+        self.assertNotEqual(advisory, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, advisory)
+
+        # Mutation control: dropping the scan dependency sends the image to
+        # production while the scanner is still running or failing.
+        independent = build.replace(
+            "  deploy:\n    needs: [build, scan]\n",
+            "  deploy:\n    needs: build\n",
+            1,
+        )
+        self.assertNotEqual(independent, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, independent)
+
+        # Mutation control: locking the scanner itself to `main` would make the
+        # feature-branch rehearsal impossible and leave the first scan after a
+        # merge as the only opportunity to discover a broken action.
+        branch_locked = build.replace(
+            "    if: github.event_name != 'pull_request'\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    timeout-minutes: 30\n",
+            "    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    timeout-minutes: 30\n",
+            1,
+        )
+        self.assertNotEqual(branch_locked, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, branch_locked)
 
     def test_digest_cannot_resolve_to_an_attestation(self) -> None:
         build = workflow("ghcr.yaml")
