@@ -786,6 +786,99 @@ def assert_base_image_is_pinned(case: unittest.TestCase, text: str) -> None:
     )
 
 
+MIN_RUNTIME_DEPENDENCIES = {
+    "@azure/identity": (4, 14, 1),
+    "@azure/msal-node": (7, 1, 2),
+    "@grpc/grpc-js": (1, 14, 7),
+    "axios": (0, 34, 0),
+    "body-parser": (1, 20, 9),
+    "follow-redirects": (1, 16, 2),
+    "liquidjs": (10, 30, 1),
+    "mysql2": (3, 24, 6),
+    "nodemailer": (10, 3, 1),
+    "protobufjs": (8, 8, 0),
+    "redbean-node": (0, 4, 0),
+    "tar": (7, 5, 22),
+    "ws": (8, 22, 1),
+}
+
+MIN_INSTALLER_TAR_OVERRIDES = {
+    "@louislam/sqlite3": (7, 5, 22),
+    "@mapbox/node-pre-gyp": (7, 5, 22),
+    "node-gyp": (7, 5, 22),
+    "cacache": (7, 5, 22),
+}
+
+
+def release_tuple(value: str) -> tuple[int, int, int]:
+    return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
+
+
+def assert_container_security_contract(case: unittest.TestCase, text: str) -> None:
+    """Keep the runtime hardening choices from being silently simplified away."""
+    case.assertRegex(
+        text,
+        r"(?m)^RUN apt-get update \\\n\s+&& apt-get dist-upgrade -y --no-install-recommends \\\n",
+        "the inherited Debian packages must be upgraded before dependencies are added",
+    )
+    case.assertRegex(
+        text,
+        r"rm -f [^\n]*/app/extra/healthcheck",
+        "the obsolete Go healthcheck must be removed",
+    )
+
+    healthcheck = re.search(r"(?ms)^HEALTHCHECK\b.*?(?=\n\n|\Z)", text)
+    case.assertIsNotNone(healthcheck, "the image must define a healthcheck")
+    healthcheck_text = healthcheck.group(0) if healthcheck else ""
+    case.assertIn(
+        "CMD curl --fail --silent --show-error http://127.0.0.1:3001/ || exit 1",
+        healthcheck_text,
+        "the healthcheck must probe the application listener with curl",
+    )
+    case.assertNotIn(
+        "/app/extra/healthcheck",
+        healthcheck_text,
+        "the obsolete Go healthcheck must not be restored",
+    )
+
+    for package, minimum in MIN_RUNTIME_DEPENDENCIES.items():
+        match = re.search(rf"(?<![\w./-]){re.escape(package)}@(\d+\.\d+\.\d+)", text)
+        case.assertIsNotNone(match, f"runtime dependency {package} is not pinned")
+        if match:
+            case.assertGreaterEqual(
+                release_tuple(match.group(1)),
+                minimum,
+                f"runtime dependency {package} was downgraded",
+            )
+
+    for package, minimum in MIN_INSTALLER_TAR_OVERRIDES.items():
+        pattern = rf'"overrides\.{re.escape(package)}\.tar=(\d+\.\d+\.\d+)"'
+        match = re.search(pattern, text)
+        case.assertIsNotNone(match, f"installer tar override for {package} is missing")
+        if match:
+            case.assertGreaterEqual(
+                release_tuple(match.group(1)),
+                minimum,
+                f"installer tar override for {package} was downgraded",
+            )
+
+    case.assertRegex(
+        text,
+        r"rm -f /app/package-lock\.json \\\n\s+&& find /app/node_modules "
+        r"-type f -name package-lock\.json -delete",
+        "generated and package-shipped lock metadata must be removed",
+    )
+    case.assertIn("historical lockfiles", text)
+    case.assertIn("installed node_modules tree", text)
+    case.assertIn("npm is a build-time tool", text)
+    case.assertRegex(
+        text,
+        r"rm -rf /usr/local/lib/node_modules/npm \\\n\s+"
+        r"&& rm -f /usr/local/bin/npm /usr/local/bin/npx",
+        "npm and npx must be removed from the runtime image",
+    )
+
+
 def workflow(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
 
@@ -981,6 +1074,58 @@ def assert_digest_names_one_image_manifest(case: unittest.TestCase, build: str) 
     # unfiltered index yields every child (image + attestation), which fails.
     case.assertIn("wc -l)\" -eq 1", step)
     case.assertIn('[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]', step)
+
+
+def assert_digest_scan_and_sbom_gate(case: unittest.TestCase, build: str) -> None:
+    """Deployment is downstream of a scan and SBOM of the exact digest."""
+    scan = build.split("\n  scan:\n", 1)[1].split("\n  deploy:\n", 1)[0]
+    digest_ref = "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}"
+
+    case.assertIn("    needs: build\n", scan)
+    case.assertRegex(scan, r"(?m)^    if: github\.event_name != 'pull_request'$")
+    permissions = scan.split("    permissions:\n", 1)[1].split("    steps:\n", 1)[0]
+    case.assertIn("packages: read", permissions)
+    case.assertIn("security-events: write", permissions)
+
+    # The SBOM and both scan passes consume the immutable amd64 manifest. A
+    # mutable tag would inspect a different artifact than the one that deploys.
+    case.assertEqual(scan.count(digest_ref), 3, "every scan must name the build digest")
+    case.assertNotIn(":latest", scan)
+    case.assertIn("anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c", scan)
+    case.assertIn("format: cyclonedx-json", scan)
+    case.assertIn("output-file: sbom.cdx.json", scan)
+    case.assertIn("syft-version: v1.55.0", scan)
+    case.assertEqual(
+        scan.count("aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25"),
+        2,
+        "the full inventory and actionable gate must both run",
+    )
+    case.assertIn("severity: HIGH,CRITICAL", scan)
+    case.assertIn("exit-code: '1'", scan)
+    case.assertIn("ignore-unfixed: 'false'", scan)
+    case.assertIn("exit-code: '0'", scan)
+    case.assertIn("ignore-unfixed: 'true'", scan)
+    case.assertIn("format: sarif", scan)
+    case.assertIn("output: trivy-results.sarif", scan)
+    case.assertLess(
+        scan.index("Inventory all HIGH and CRITICAL vulnerabilities"),
+        scan.index("Block on fixable HIGH and CRITICAL vulnerabilities"),
+        "the complete inventory must be produced before the blocking scan",
+    )
+    case.assertIn("github/codeql-action/upload-sarif@b20883b0cd1f46c72ae0ba6d1090936928f9fa30", scan)
+    case.assertIn("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", scan)
+    case.assertIn('digest_name="${DIGEST//:/-}"', scan)
+    case.assertIn("name: sbom-${{ steps.image.outputs.digest_name }}", scan)
+    case.assertIn("sbom-image.txt", scan)
+
+    # A successful scan is a job dependency, not an advisory annotation.
+    case.assertIn("\n  deploy:\n    needs: [build, scan]\n", build)
+    case.assertIn(
+        "  deploy:\n    needs: [build, scan]\n"
+        "    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'\n",
+        build,
+    )
+    case.assertIn("needs: [rebuild_check, validate, build, scan, deploy]", build)
 
 
 def schedule_entries(text: str) -> list[str]:
@@ -2261,6 +2406,22 @@ class RecurringContractTest(unittest.TestCase):
             run_matrix(partial, document, ["docs/target_mode.md"]).stderr,
         )
         self.assertEqual(run_matrix(partial, document, ["scripts/pr_matrix.py"]).returncode, 0)
+        # Extensionless root files are real changed paths too. The path pattern
+        # had no shape for `Dockerfile`, so a complete bullet could not cover a
+        # Dockerfile change even though the PR API reported it.
+        extensionless = good.replace(
+            "## Changes\n\nx", "## Changes\n\n- `Dockerfile`: rebuilt.", 1
+        )
+        self.assertEqual(
+            run_matrix(extensionless, document, ["Dockerfile"]).returncode, 0
+        )
+        without_extensionless = run_mutated_matrix(
+            extensionless,
+            document,
+            [("        found.extend((span, False) for span in SPAN.findall(bare) if Path(span).is_file())\n", "")],
+            ["Dockerfile"],
+        )
+        self.assertIn("does not name the touched file Dockerfile", without_extensionless.stderr)
         # Repository dotfiles are changed paths too. The extension-only file
         # shape read `.dockerignore` as prose, so a real change could not name
         # itself even when the bullet was complete.
@@ -3216,6 +3377,67 @@ class RecurringContractTest(unittest.TestCase):
             assert_actions_are_pinned(self, unlabelled)
         self.assertIn("no version comment", str(caught.exception))
 
+    def test_published_digest_is_scanned_and_sbom_bound(self) -> None:
+        build = workflow("ghcr.yaml")
+        assert_digest_scan_and_sbom_gate(self, build)
+
+        # Mutation control: scanning a mutable tag would leave the deployed
+        # digest unscanned even though the job stayed green.
+        digest_ref = "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}"
+        mutable = build.replace(digest_ref, "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest")
+        self.assertNotEqual(mutable, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, mutable)
+
+        # Mutation control: a report-only scanner never blocks deployment.
+        advisory = build.replace("exit-code: '1'", "exit-code: '0'", 1)
+        self.assertNotEqual(advisory, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, advisory)
+
+        # Mutation control: unfixed advisories cannot silently become blocking
+        # again; that makes every Debian build fail without an available fix.
+        unfixed_blocking = build.replace(
+            "ignore-unfixed: 'true'", "ignore-unfixed: 'false'", 1
+        )
+        self.assertNotEqual(unfixed_blocking, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, unfixed_blocking)
+
+        # Mutation control: the complete inventory must not become blocking,
+        # otherwise its unfixed rows prevent the fixable gate from ever running.
+        inventory_blocking = build.replace("exit-code: '0'", "exit-code: '1'", 1)
+        self.assertNotEqual(inventory_blocking, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, inventory_blocking)
+
+        # Mutation control: dropping the scan dependency sends the image to
+        # production while the scanner is still running or failing.
+        independent = build.replace(
+            "  deploy:\n    needs: [build, scan]\n",
+            "  deploy:\n    needs: build\n",
+            1,
+        )
+        self.assertNotEqual(independent, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, independent)
+
+        # Mutation control: locking the scanner itself to `main` would make the
+        # feature-branch rehearsal impossible and leave the first scan after a
+        # merge as the only opportunity to discover a broken action.
+        branch_locked = build.replace(
+            "    if: github.event_name != 'pull_request'\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    timeout-minutes: 30\n",
+            "    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    timeout-minutes: 30\n",
+            1,
+        )
+        self.assertNotEqual(branch_locked, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, branch_locked)
+
     def test_digest_cannot_resolve_to_an_attestation(self) -> None:
         build = workflow("ghcr.yaml")
         assert_digest_names_one_image_manifest(self, build)
@@ -3925,6 +4147,52 @@ class RecurringMutationTest(unittest.TestCase):
         self.assertNotEqual(mutable, text)
         with self.assertRaises(AssertionError):
             assert_base_image_is_pinned(self, mutable)
+
+    def test_container_security_mutations_turn_red(self) -> None:
+        text = DOCKERFILE.read_text(encoding="utf-8")
+        assert_container_security_contract(self, text)
+
+        mutations = {
+            "dist-upgrade removed": text.replace(
+                "RUN apt-get update \\\n"
+                "    && apt-get dist-upgrade -y --no-install-recommends \\\n"
+                "    && rm -rf /var/lib/apt/lists/*\n",
+                "",
+                1,
+            ),
+            "old healthcheck restored": text.replace(
+                "CMD curl --fail --silent --show-error http://127.0.0.1:3001/ || exit 1",
+                'CMD ["/app/extra/healthcheck"]',
+                1,
+            ),
+            "health port drifted": text.replace("127.0.0.1:3001", "127.0.0.1:3002", 1),
+            "runtime dependency downgraded": text.replace("ws@8.22.1", "ws@8.22.0", 1),
+            "tar override removed": text.replace(
+                '        "overrides.node-gyp.tar=7.5.22" \\\n', "", 1
+            ),
+            "nested lock cleanup removed": text.replace(
+                "\n    && find /app/node_modules -type f -name package-lock.json -delete",
+                "",
+                1,
+            ),
+            "npm package removal removed": text.replace(
+                "    && rm -rf /usr/local/lib/node_modules/npm \\\n", "", 1
+            ),
+            "npm wrapper removal removed": text.replace(
+                " /usr/local/bin/npm", "", 1
+            ),
+            "npx wrapper removal removed": text.replace(
+                " /usr/local/bin/npx", "", 1
+            ),
+            "obsolete healthcheck no longer removed": text.replace(
+                " /app/extra/healthcheck", "", 1
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(mutated, text)
+                with self.assertRaises(AssertionError):
+                    assert_container_security_contract(self, mutated)
 
     def test_tampered_binary_digest_is_detected(self) -> None:
         text = DOCKERFILE.read_text(encoding="utf-8")

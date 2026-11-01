@@ -201,8 +201,106 @@ jobs:
           DIGEST: ${{ steps.digest.outputs.digest }}
         run: python3 tests/runtime_smoke.py "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
 
-  deploy:
+  # The build outputs one immutable amd64 manifest. Scan and inventory that
+  # exact digest before any deploy job can reach Fly.io.
+  scan:
     needs: build
+    # Pull requests do not run the publish chain, but a manual dispatch on the
+    # feature branch must be able to exercise the build, scan and SBOM path
+    # before merge. Deployment remains main-only below.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    steps:
+      - name: 🔐 Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🧷 Record the scanned image
+        id: image
+        env:
+          DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::the build digest is missing or malformed" >&2
+            exit 1
+          }
+          digest_name="${DIGEST//:/-}"
+          printf 'digest_name=%s\n' "$digest_name" >> "$GITHUB_OUTPUT"
+          printf '%s/%s@%s\n' "$REGISTRY" "$IMAGE_NAME" "$DIGEST" > sbom-image.txt
+
+      - name: 🧾 Generate a CycloneDX SBOM for the published digest
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+          syft-version: v1.55.0
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📦 Upload the digest-bound SBOM
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-${{ steps.image.outputs.digest_name }}
+          path: |
+            sbom.cdx.json
+            sbom-image.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      # Preserve the complete finding set for code scanning and review. This
+      # pass is intentionally non-blocking because Debian currently carries
+      # HIGH/CRITICAL advisories with no fixed package available.
+      - name: 🧾 Inventory all HIGH and CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
+          scan-type: image
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+          ignore-unfixed: 'false'
+          vuln-type: os,library
+          limit-severities-for-sarif: 'true'
+          timeout: 10m0s
+
+      # Deployment is blocked only when an available upgrade can remove the
+      # finding. Unfixed base-image advisories remain visible in the full SARIF
+      # report above instead of making every build permanently red.
+      - name: 🛡️ Block on fixable HIGH and CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
+          scan-type: image
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: 'true'
+          vuln-type: os,library
+          timeout: 10m0s
+
+      - name: 🧭 Upload vulnerability results to code scanning
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@b20883b0cd1f46c72ae0ba6d1090936928f9fa30 # v4.32.0
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image-digest
+
+  deploy:
+    needs: [build, scan]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -376,7 +474,7 @@ jobs:
           echo "promoted ${image}:latest -> ${index_digest} (amd64 ${AMD64_DIGEST})"
 
   notify-failure:
-    needs: [rebuild_check, validate, build, deploy]
+    needs: [rebuild_check, validate, build, scan, deploy]
     if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -397,4 +495,4 @@ jobs:
           branch: ${{ github.ref_name }}
           commit: ${{ github.sha }}
           conclusion: failure
-          reason: Image validation, build, digest smoke test, deploy, or verification failed.
+          reason: Image validation, build, digest scan, SBOM, deploy, or verification failed.
