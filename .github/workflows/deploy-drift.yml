@@ -38,7 +38,7 @@ jobs:
       github.event.workflow_run.conclusion != 'skipped'
     steps:
       - name: 📥 Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # `workflow_run` runs on the default branch; the check must read the
           # commit that was just published, not whatever HEAD is by then.
@@ -66,7 +66,7 @@ jobs:
 
       # `latest` is ours and public; a token is only needed for the app reads.
       - name: 🔐 Log into registry ${{ env.REGISTRY }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
