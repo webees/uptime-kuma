@@ -1,6 +1,6 @@
 # Automation Inventory
 
-Audit baseline: `8e00072` on 2026-11-02. This inventory answers whether the
+Audit baseline: `691071e` on 2026-11-02. This inventory answers whether the
 workflows and scripts are reachable, what each protects, and whether any can be
 removed. A script is a deletion candidate only after proving it has no caller,
 no runtime or release dependency, and no rollback value.
@@ -11,7 +11,7 @@ no runtime or release dependency, and no rollback value.
 | :--- | :--- | :--- | :--- | :--- |
 | `validate.yml` | push to `main`, pull request, manual, reusable call | shell/Python checks, actionlint, round matrix, image smoke and Caddy validation | required merge gate; `ghcr.yaml` calls it before publishing | retain; a required status context |
 | `ghcr.yaml` | push to `main` or tags, weekly schedule, manual | validate, multi-arch build, digest smoke, SBOM, Trivy gates, exact-digest deploy, Fly verification, `latest` promotion | sole trusted publish and production deploy path | retain; cannot be merged into a local helper |
-| `deploy-drift.yml` | after each `ghcr.yaml` run, daily schedule, manual | compares the running machine with the promoted `latest` amd64 child | detects hand deploys and incomplete promotions after the fact | retain; independent observer of the publish path |
+| `deploy-drift.yml` | after each `ghcr.yaml` run, daily schedule, manual | compares every running machine's image and health with the newest completed release and the promoted `latest` amd64 child; probes `/health`, `/` and `/dashboard` publicly | detects hand deploys, unhealthy machines, a dead backend behind Caddy and incomplete promotions after the fact | retain; independent observer of the publish path |
 | `upstream-updates.yml` | daily schedule, manual | resolves Uptime Kuma/supercronic and direct Node.js pins, opens or refreshes `deps/upstream`, waits for `validate`, merges stable updates, dispatches publish | keeps the upstream image, scheduler and direct runtime dependencies current | retain; separate from runtime scripts because it needs write/merge permissions |
 | `dependabot-automerge.yml` | Dependabot pull request events | accepts only same-Action immutable SHA/comment updates, waits for required `validate`, merges | keeps GitHub Action pins current without accepting workflow logic changes | retain; `pull_request_target` security boundary |
 | `ghcr-cleanup.yml` | daily schedule, push to `main`, manual | removes untagged or stale GHCR images and shares the publish registry lock | bounds registry growth without deleting a build currently under test | retain; cleanup has different permissions and failure behavior |
@@ -29,9 +29,9 @@ workflows have distinct event and permission boundaries.
 | `entrypoint.sh` | container entrypoint | validates startup inputs and hands control to the process supervisors | retain; runtime-critical |
 | `entrypoint/config.sh` | `entrypoint.sh`, image tests | DNS/URL/SMTP input validation and Caddy address audit | retain; runtime-critical |
 | `services.sh` | container entrypoint | supervises Caddy and supercronic; application exit stops the container | retain; runtime-critical |
-| `restic.sh` | container cron and SSH operations | consistent SQLite backup, freshness check, isolated restore drill, confirmed in-place restore | retain; data protection and rollback |
+| `restic.sh` | container cron and SSH operations | consistent SQLite backup, freshness check, isolated restore drill with an application boot check, confirmed in-place restore | retain; data protection and rollback |
 | `rebuild.sh` | `ghcr.yaml` scheduled probe | counts pending published-image upgrades so weekly builds skip when current | retain; avoids unnecessary production deploys |
-| `deploy_drift.py` | `deploy-drift.yml` | parses release, machine and `latest` manifests and fails on unreadable or mismatched state | retain; independent production audit |
+| `deploy_drift.py` | `deploy-drift.yml` | parses release, machine health and `latest` manifests and fails on unreadable, stopped, unhealthy or mismatched state; the workflow then probes the public application paths | retain; independent production audit |
 | `upstream_deps.py` | `upstream-updates.yml` | resolves, compares and rewrites the five image/tool pins plus the explicit Node.js and tar override pins | retain; bounded dependency update boundary |
 | `check_schedules.py` | both watchdog workflows | detects disabled or overdue scheduled workflows through GitHub metadata | retain; watchdog evidence |
 | `check_automation_credentials.py` | `automation-health.yml` | fail-closed token lifetime and HTTPS webhook preflight without secret output | retain; deploy prerequisite |
