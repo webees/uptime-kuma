@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `9662ae2` on 2026-11-01,
-extending the previous baseline at `24caa92`. Every later round must extend that
+Audit baseline: every commit reachable through `14efaf1` on 2026-11-02,
+extending the previous baseline at `9662ae2`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -358,6 +358,18 @@ Trivy 0.70.0 reported `Node.js: 0` and the actionable gate exited `0` for
 `uptime-kuma:security-test-v3`; the Debian 12.15 result remained 354 HIGH and
 18 CRITICAL, all unfixed and explicitly retained in the full SARIF inventory.
 
+Deployment-credential history: the publish path could start a release with an
+expired or missing Fly token, and the notification action treated a missing
+webhook as a successful skip. The failure therefore surfaced only after a
+deploy had already begun, or not at all. Final decision: Automation Health's
+scheduled and manual runs require an app-scoped `FlyV1` token, a
+timezone-qualified expiry marker between 30 and 90 days away, and an HTTPS
+webhook. The checker emits only generic errors and never echoes either value.
+A watched workflow's own always-running notifier is the sole external alert for
+that source failure; Automation Health does not duplicate it. The credential
+guard lives in `scripts/check_automation_credentials.py:check` and
+`.github/workflows/automation-health.yml:Deployment credentials are present and within policy`.
+
 The publish workflow also carries one weekly `schedule`, so a base-image or
 OS-package fix can ship without a code change. Scheduled runs use `main` HEAD
 and traverse the same validate -> build -> deploy chain.
@@ -474,13 +486,19 @@ Authority: `Dockerfile` digest/sha arguments,
 `scripts/upstream_deps.py:compare` and
 `scripts/check_schedules.py:check_workflow`, and
 `.github/workflows/dependabot-automerge.yml:validate-and-merge` with
-`scripts/validate_action_pin_update.py:validate`.
+`scripts/validate_action_pin_update.py:validate`, and
+`.github/workflows/automation-health.yml:Deployment credentials are present and within policy`
+with `scripts/check_automation_credentials.py:check`.
 The recorded branch rule is `docs/branch_protection.json`, read by
 `scripts/branch_rule.py:compare`.
 
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
 `tests/test_recurring_gate.py:test_latest_is_promoted_only_after_verification`;
+`tests/test_automation_credentials.py:test_webhook_anchor_mutation_turns_rejection_red`,
+`tests/test_automation_credentials.py:test_timezone_mutation_turns_rejection_red`, and
+`tests/test_automation_credentials.py:test_failure_output_never_contains_credential_values`
+remove full-match, timezone, and secret-redaction enforcement;
 `tests/test_recurring_gate.py:test_published_digest_is_scanned_and_sbom_bound`
 replaces the digest with `latest`, makes the actionable Trivy pass report-only,
 makes unfixed findings blocking again, makes the complete inventory blocking,

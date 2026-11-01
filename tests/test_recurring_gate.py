@@ -1166,6 +1166,7 @@ PUSH_IGNORABLE = {
     "scripts/branch_rule.py",
     "scripts/pr_matrix.py",
     "scripts/check_schedules.py",
+    "scripts/check_automation_credentials.py",
     "scripts/upstream_deps.py",
     "scripts/validate_action_pin_update.py",
 }
