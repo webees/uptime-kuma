@@ -514,6 +514,12 @@ executes the probe against fake `docker` output;
 controls the merge boundary, publish dispatch, and mutual watchdog links, and
 `tests/test_recurring_gate.py:test_upstream_deps_resolves_and_rewrites_only_the_pins`
 controls bounded resolution and the five-line rewrite, and
+`tests/test_upstream_deps.py:test_compare_and_apply_do_not_downgrade_an_ahead_pin`
+changes the registry target below the existing pin and proves compare stays
+unchanged while apply refuses the rollback; the same suite rejects deprecated,
+prerelease, identity-drift, missing, unexpected, and divergent tar metadata,
+then verifies the workflow carries the resolved package map into both compare
+and apply, and
 `tests/test_recurring_gate.py:test_schedule_checker_fails_closed` exercises a
 disabled, stale, and future-dated workflow plus schedule-changing and unrelated
 recent commits, and
