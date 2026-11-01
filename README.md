@@ -309,6 +309,11 @@ python3.13 scripts/upstream_deps.py compare --uptime-version … --uptime-digest
   through SMTP and `backup-status.txt`; if SMTP is misconfigured the failure
   stays in the workflow-free cron log. The restore drill proves a snapshot is
   readable and consistent, not that the application boots against it.
+- `ALERT_WEBHOOK_URL` is not configured in this repository. If a workflow
+  fails, the notifier writes an explicit skipped notice and no external alert
+  is delivered; the failed run remains the only signal. Trigger: the repository
+  secret is absent. Observed by: `gh secret list` returning no
+  `ALERT_WEBHOOK_URL` entry.
 
 ## 📝 License
 

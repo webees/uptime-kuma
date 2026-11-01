@@ -483,6 +483,60 @@ def assert_caller_grants_the_called_permissions(
         case.assertIn(scope, have, f"the caller does not grant {scope} to validate.yml")
 
 
+def assert_failure_notifications_are_wired(
+    case: unittest.TestCase,
+    workflows: dict[str, str],
+    action: str,
+    readme: str,
+) -> None:
+    """A notification path that silently disappears is worse than none.
+
+    Every automated workflow has to call the shared notifier on failure or
+    cancellation. The action must fail closed for a malformed URL while making
+    an absent secret visibly skipped, and the README residual register must keep
+    that configuration gap observable.
+    """
+    expected = {
+        "automation-health.yml",
+        "deploy-drift.yml",
+        "dependabot-automerge.yml",
+        "ghcr-cleanup.yml",
+        "ghcr.yaml",
+        "upstream-updates.yml",
+        "validate.yml",
+    }
+    case.assertEqual(set(workflows), expected, "a workflow was added without notifier review")
+    for name, text in workflows.items():
+        case.assertIn(
+            "uses: ./.github/actions/notify-failure",
+            text,
+            f"{name} has no failure notifier",
+        )
+        case.assertIn(
+            "webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}",
+            text,
+            f"{name} does not read ALERT_WEBHOOK_URL",
+        )
+        case.assertTrue(
+            "if: always() && (failure() || cancelled())" in text
+            or "if: always() && (contains(needs.*.result, 'failure') || "
+               "contains(needs.*.result, 'cancelled'))" in text,
+            f"{name} does not notify after a failed or cancelled job",
+        )
+
+    # An absent secret is a visible configuration gap, not a success claim.
+    case.assertIn('if [ -z "${ALERT_WEBHOOK_URL:-}" ]; then', action)
+    case.assertIn("failure notification skipped", action)
+    case.assertIn("^https://[^[:space:]]+$", action)
+    case.assertIn("--retry 3 --retry-delay 2 --max-time 20", action)
+
+    residual = readme.split("\n## ⚠️ Residual risk\n", 1)
+    case.assertEqual(len(residual), 2, "the residual register is missing")
+    case.assertIn("`ALERT_WEBHOOK_URL` is not configured", residual[1])
+    case.assertIn("explicit skipped notice", residual[1])
+    case.assertIn("`gh secret list`", residual[1])
+
+
 def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -> None:
     """A hand deploy reaches production first, so the detector must exist.
 
@@ -2902,6 +2956,47 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(empty, validate)
         with self.assertRaises(AssertionError):
             assert_matrix_gate_is_wired(self, empty)
+
+    def test_failure_notifications_are_wired_and_honest(self) -> None:
+        workflows = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
+        }
+        action = (ROOT / ".github/actions/notify-failure/action.yml").read_text(
+            encoding="utf-8"
+        )
+        readme = README.read_text(encoding="utf-8")
+        assert_failure_notifications_are_wired(self, workflows, action, readme)
+
+        # Mutation control: a workflow that loses its notifier still looks
+        # automated, but an unattended failure now disappears from the alert
+        # channel.
+        missing = {**workflows, "validate.yml": workflows["validate.yml"].replace(
+            "uses: ./.github/actions/notify-failure", "run: echo skipped", 1
+        )}
+        self.assertNotEqual(missing["validate.yml"], workflows["validate.yml"])
+        with self.assertRaises(AssertionError) as caught:
+            assert_failure_notifications_are_wired(self, missing, action, readme)
+        self.assertIn("validate.yml has no failure notifier", str(caught.exception))
+
+        # Mutation control: removing the empty-secret branch makes a skipped
+        # notification continue into a request with no usable destination.
+        unguarded = action.replace('if [ -z "${ALERT_WEBHOOK_URL:-}" ]; then',
+                                   "if false; then", 1)
+        self.assertNotEqual(unguarded, action)
+        with self.assertRaises(AssertionError):
+            assert_failure_notifications_are_wired(self, workflows, unguarded, readme)
+
+        # Mutation control: deleting the residual hides the only remaining
+        # signal when the repository secret has not been configured.
+        undocumented = readme.replace(
+            "`ALERT_WEBHOOK_URL` is not configured", "The webhook is configured", 1
+        )
+        self.assertNotEqual(undocumented, readme)
+        with self.assertRaises(AssertionError):
+            assert_failure_notifications_are_wired(
+                self, workflows, action, undocumented
+            )
 
     def test_contract_mutation_removes_authoritative_field(self) -> None:
         text = DOC.read_text(encoding="utf-8")
