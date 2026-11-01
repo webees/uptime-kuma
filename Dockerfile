@@ -1,17 +1,17 @@
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║ Uptime Kuma Deployment                                                    ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
-ARG UPTIME_KUMA_VERSION=2.1.0-beta.2
+ARG UPTIME_KUMA_VERSION=2.5.9
 
 # Pinned index digest: a retagged beta can never silently change the base.
-FROM louislam/uptime-kuma:${UPTIME_KUMA_VERSION}@sha256:3bc2b7a28a5debba4d33cef02b1cf97699404af30d5a5227a48d0fe226d6321b
+FROM louislam/uptime-kuma:${UPTIME_KUMA_VERSION}@sha256:e88415a90dd2f7efecdbc18de0490aff292764a3ac471531bf1d0481725591bd
 
 # ── Build Args ────────────────────────────────────────────────────────────────
 ARG TARGETARCH
-ARG SUPERCRONIC_URL=https://github.com/aptible/supercronic/releases/download/v0.2.37/supercronic-linux-${TARGETARCH}
+ARG SUPERCRONIC_URL=https://github.com/aptible/supercronic/releases/download/v0.2.51/supercronic-linux-${TARGETARCH}
 # sha256 of the release asset per architecture, verified before use.
-ARG SUPERCRONIC_SHA256_amd64=14a91b905dc68eaf533557734198b5d4a46898109c29193becddda40bf7b09d2
-ARG SUPERCRONIC_SHA256_arm64=b8fe14272949722290a6e0d271ad6198fbaa62cedb9c8bc3608b42996af0915c
+ARG SUPERCRONIC_SHA256_amd64=cc232108374e8e2b537045f2d5eaa1229f619db314c3ba6a14d38b35dc0aa123
+ARG SUPERCRONIC_SHA256_arm64=4ae22576a78223d8ccdf5f3b3660a5cbb5288416bf0ca96afc4a36d195932b94
 
 # ── Environment ───────────────────────────────────────────────────────────────
 ENV WORKDIR=/app \
