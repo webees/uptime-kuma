@@ -22,6 +22,10 @@ evidence, keep the same focus with a sharper failure condition, record the exact
 blocker, or replace the objective when the user changes it. A timestamp,
 counter, or rewording is not a delta.
 
+The quality contract in `GOAL.md` is durable. Updating `Current Focus` must not
+weaken or remove it, and a claim of completion must cite evidence from the
+current SHA.
+
 ## Hard rules
 
 - Answer in Chinese; commit messages, PR titles and PR bodies in English.
