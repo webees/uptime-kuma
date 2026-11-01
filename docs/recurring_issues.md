@@ -366,13 +366,9 @@ scheduled and manual runs require an app-scoped `FlyV1` token, a
 timezone-qualified expiry marker between 30 and 90 days away, and an HTTPS
 webhook. The checker emits only generic errors and never echoes either value.
 A watched workflow's own always-running notifier is the sole external alert for
-that source failure; Automation Health does not duplicate it. Authority:
-`scripts/check_automation_credentials.py:check` and
+that source failure; Automation Health does not duplicate it. The credential
+guard lives in `scripts/check_automation_credentials.py:check` and
 `.github/workflows/automation-health.yml:Deployment credentials are present and within policy`.
-Mutation control:
-`tests/test_automation_credentials.py:test_webhook_anchor_mutation_turns_rejection_red`
-and `test_timezone_mutation_turns_rejection_red`; removing full-match or
-timezone enforcement makes the corresponding negative assertion fail.
 
 The publish workflow also carries one weekly `schedule`, so a base-image or
 OS-package fix can ship without a code change. Scheduled runs use `main` HEAD
@@ -490,13 +486,19 @@ Authority: `Dockerfile` digest/sha arguments,
 `scripts/upstream_deps.py:compare` and
 `scripts/check_schedules.py:check_workflow`, and
 `.github/workflows/dependabot-automerge.yml:validate-and-merge` with
-`scripts/validate_action_pin_update.py:validate`.
+`scripts/validate_action_pin_update.py:validate`, and
+`.github/workflows/automation-health.yml:Deployment credentials are present and within policy`
+with `scripts/check_automation_credentials.py:check`.
 The recorded branch rule is `docs/branch_protection.json`, read by
 `scripts/branch_rule.py:compare`.
 
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
 `tests/test_recurring_gate.py:test_latest_is_promoted_only_after_verification`;
+`tests/test_automation_credentials.py:test_webhook_anchor_mutation_turns_rejection_red`,
+`tests/test_automation_credentials.py:test_timezone_mutation_turns_rejection_red`, and
+`tests/test_automation_credentials.py:test_failure_output_never_contains_credential_values`
+remove full-match, timezone, and secret-redaction enforcement;
 `tests/test_recurring_gate.py:test_published_digest_is_scanned_and_sbom_bound`
 replaces the digest with `latest`, makes the actionable Trivy pass report-only,
 makes unfixed findings blocking again, makes the complete inventory blocking,
