@@ -235,6 +235,18 @@ jobs:
           }
           echo "publish run ${run_id} finished ${conclusion} for ${merge_sha}"
 
+      - name: 🚨 Notify upstream update failure
+        if: always() && (failure() || cancelled())
+        uses: ./.github/actions/notify-failure
+        with:
+          webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}
+          workflow: ${{ github.workflow }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch: ${{ github.ref_name }}
+          commit: ${{ github.sha }}
+          conclusion: ${{ job.status }}
+          reason: Upstream resolution, validation, merge, publish, or deploy dispatch failed.
+
   # A schedule that GitHub disables after 60 idle days, or a cron that silently
   # stops firing, is indistinguishable from "nothing needed updating". This
   # job deliberately does not check itself: a disabled workflow cannot run its
@@ -263,3 +275,15 @@ jobs:
             --workflow deploy-drift.yml=48 \
             --workflow ghcr-cleanup.yml=48 \
             --workflow automation-health.yml=48
+
+      - name: 🚨 Notify watchdog failure
+        if: always() && (failure() || cancelled())
+        uses: ./.github/actions/notify-failure
+        with:
+          webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}
+          workflow: ${{ github.workflow }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch: ${{ github.ref_name }}
+          commit: ${{ github.sha }}
+          conclusion: ${{ job.status }}
+          reason: A scheduled workflow is disabled, overdue, or failing.

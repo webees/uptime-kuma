@@ -1,0 +1,76 @@
+name: Notify workflow failure
+description: Send a bounded failure notification to an HTTPS webhook.
+
+inputs:
+  webhook-url:
+    description: HTTPS webhook stored as the ALERT_WEBHOOK_URL repository secret.
+    required: false
+  workflow:
+    description: Workflow display name.
+    required: true
+  run-url:
+    description: Canonical URL for this run.
+    required: true
+  branch:
+    description: Branch or ref associated with the run.
+    required: true
+  commit:
+    description: Commit associated with the run.
+    required: true
+  conclusion:
+    description: Failure conclusion from the caller.
+    required: true
+  reason:
+    description: Short, non-secret explanation.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Send failure notification
+      shell: bash
+      env:
+        ALERT_WEBHOOK_URL: ${{ inputs.webhook-url }}
+        WORKFLOW: ${{ inputs.workflow }}
+        RUN_URL: ${{ inputs.run-url }}
+        BRANCH: ${{ inputs.branch }}
+        COMMIT: ${{ inputs.commit }}
+        CONCLUSION: ${{ inputs.conclusion }}
+        REASON: ${{ inputs.reason }}
+      run: |
+        set -euo pipefail
+        if [ -z "${ALERT_WEBHOOK_URL:-}" ]; then
+          echo "::notice title=Alert webhook not configured::ALERT_WEBHOOK_URL is unset; failure notification skipped."
+          exit 0
+        fi
+        if [[ ! "$ALERT_WEBHOOK_URL" =~ ^https://[^[:space:]]+$ ]]; then
+          echo "::error title=Invalid alert webhook::ALERT_WEBHOOK_URL must be a single HTTPS URL."
+          exit 1
+        fi
+        message="[${GITHUB_REPOSITORY}] ${WORKFLOW} finished ${CONCLUSION}: ${REASON}"
+        payload="$(jq -cn \
+          --arg repository "$GITHUB_REPOSITORY" \
+          --arg workflow "$WORKFLOW" \
+          --arg run_url "$RUN_URL" \
+          --arg branch "$BRANCH" \
+          --arg commit "$COMMIT" \
+          --arg conclusion "$CONCLUSION" \
+          --arg reason "$REASON" \
+          --arg text "$message" \
+          '{
+            repository: $repository,
+            workflow: $workflow,
+            run_url: $run_url,
+            branch: $branch,
+            commit: $commit,
+            conclusion: $conclusion,
+            reason: $reason,
+            text: $text,
+            content: $text
+          }')"
+        curl --fail --silent --show-error --location \
+          --retry 3 --retry-delay 2 --max-time 20 \
+          --header 'Content-Type: application/json' \
+          --data "$payload" \
+          "$ALERT_WEBHOOK_URL" >/dev/null
+        echo "Failure notification sent."

@@ -90,3 +90,15 @@ jobs:
             "${REGISTRY}/${IMAGE_NAME}:latest" --raw > "$out/latest.json"
           python3 scripts/deploy_drift.py \
             "$out/releases.json" "$out/status.json" "$out/latest.json"
+
+      - name: 🚨 Notify drift failure
+        if: always() && (failure() || cancelled())
+        uses: ./.github/actions/notify-failure
+        with:
+          webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}
+          workflow: ${{ github.workflow }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch: ${{ github.ref_name }}
+          commit: ${{ github.sha }}
+          conclusion: ${{ job.status }}
+          reason: Production no longer matches the promoted image or the drift check could not read it.

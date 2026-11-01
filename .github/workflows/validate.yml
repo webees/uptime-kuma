@@ -132,3 +132,15 @@ jobs:
           done
           echo "Caddyfile adapts with and without an allowlist"
 
+      - name: 🚨 Notify validation failure
+        if: always() && (failure() || cancelled())
+        uses: ./.github/actions/notify-failure
+        with:
+          webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}
+          workflow: ${{ github.workflow }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch: ${{ github.ref_name }}
+          commit: ${{ github.sha }}
+          conclusion: ${{ job.status }}
+          reason: A validation gate failed.
+

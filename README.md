@@ -218,6 +218,21 @@ fails when a class, a field, or a mutation control disappears.
 
 ## 🔁 Automation
 
+### Failure Notifications
+
+Create an HTTPS webhook and store it as `ALERT_WEBHOOK_URL`:
+
+```bash
+gh secret set ALERT_WEBHOOK_URL --repo webees/uptime-kuma
+```
+
+Every failure path in Validate, GHCR publish/deploy, upstream updates, deploy
+drift, GHCR cleanup, Automation Health and Dependabot auto-merge sends one JSON
+notification. The payload contains only the repository, workflow, run URL,
+branch, commit, conclusion and a short reason. It includes both `text` and
+`content` fields for common webhook receivers. If the secret is absent, the run
+prints an explicit skipped notice instead of claiming a notification was sent.
+
 Six workflows run without a human, and Dependabot updates the action pins:
 
 | Workflow | When | What it does |
