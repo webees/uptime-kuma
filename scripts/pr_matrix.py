@@ -100,7 +100,7 @@ ABSENT = re.compile(r"\babsent:", re.IGNORECASE)
 # test file in it must still be there. A moved test and a deleted script read
 # exactly like a passing one.
 PATHLIKE = re.compile(
-    r"(?<![\w./:-])((?:[\w.-]+/)+[\w.-]+|[\w-]+\.(?:py|sh|ya?ml|json|md|txt|toml))"
+    r"(?<![\w./:*-])((?:[\w.-]+/)+[\w.-]+|[\w-]+\.(?:py|sh|ya?ml|json|md|txt|toml)|\.[\w.-]+)"
 )
 # A bullet may name a directory when the change spans it: `docs/` ends in the
 # separator the file pattern requires an entry after, so it matched nothing and

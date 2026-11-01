@@ -1,0 +1,70 @@
+name: 🩺 Automation Health
+
+# A schedule silently disabled by GitHub produces no run, so the workflow that
+# stopped cannot report its own absence. This second, independently scheduled
+# watchdog checks `upstream-updates.yml`, while that workflow checks this file.
+# Either half being disabled leaves the other half running and red.
+on:
+  schedule:
+    - cron: '47 5 * * *'
+  # Workflow completions keep this checker active and surface failures between
+  # daily checks. Pull-request runs are excluded by the `main` branch filter.
+  workflow_run:
+    workflows:
+      - ⬆️ Upstream Updates
+      - 🤖 Dependabot Auto-Merge
+      - 🐳 Docker (Multi-Arch)
+      - 🧭 Deploy Drift
+      - 🧹 GHCR Cleanup
+      - Validate
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: automation-health
+  cancel-in-progress: false
+
+jobs:
+  health:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion != 'skipped'
+    steps:
+      - name: 📥 Check out the schedule checker
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: 🚨 Fail on a failed main-branch workflow
+        if: github.event_name == 'workflow_run'
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          if [ "$CONCLUSION" != success ]; then
+            echo "::error::${WORKFLOW} finished ${CONCLUSION}: ${RUN_URL}"
+            exit 1
+          fi
+          echo "${WORKFLOW} finished successfully"
+
+      # This list intentionally omits this file: `upstream-updates.yml` checks
+      # this schedule, making the two watchdogs cover each other.
+      - name: 🕒 Scheduled workflows are still active and current
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          timeout 120 python3 scripts/check_schedules.py \
+            --workflow upstream-updates.yml=48 \
+            --workflow ghcr.yaml=192 \
+            --workflow deploy-drift.yml=48 \
+            --workflow ghcr-cleanup.yml=48
