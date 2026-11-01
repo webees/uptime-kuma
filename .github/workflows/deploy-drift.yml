@@ -40,9 +40,9 @@ jobs:
       - name: 📥 Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # `workflow_run` runs on the default branch; the check must read the
-          # commit that was just published, not whatever HEAD is by then.
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # This workflow and its scripts are loaded from the default branch.
+          # Never check out the triggering run's head: its contents are not
+          # trusted to execute with registry and Fly access.
           persist-credentials: false
 
       # Same pinned GitHub release as the deploy job: the setup action resolves
@@ -90,3 +90,15 @@ jobs:
             "${REGISTRY}/${IMAGE_NAME}:latest" --raw > "$out/latest.json"
           python3 scripts/deploy_drift.py \
             "$out/releases.json" "$out/status.json" "$out/latest.json"
+
+      - name: 🚨 Notify drift failure
+        if: always() && (failure() || cancelled())
+        uses: ./.github/actions/notify-failure
+        with:
+          webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}
+          workflow: ${{ github.workflow }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch: ${{ github.ref_name }}
+          commit: ${{ github.sha }}
+          conclusion: ${{ job.status }}
+          reason: Production no longer matches the promoted image or the drift check could not read it.

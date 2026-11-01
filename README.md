@@ -117,6 +117,8 @@ image and the `latest` amd64 child and fails on a difference. It is the only
 detector for the case above — a hand deploy, or a promotion that never happened
 — because CI itself is not involved in either. It is triggered by the publish
 workflow's *title*, so renaming that workflow means renaming the listener too.
+It checks only the trusted default branch's workflow, configuration and script;
+the completed publish SHA is never checked out or executed.
 
 ### CI Deploy Credential
 
@@ -218,6 +220,21 @@ fails when a class, a field, or a mutation control disappears.
 
 ## 🔁 Automation
 
+### Failure Notifications
+
+Create an HTTPS webhook and store it as `ALERT_WEBHOOK_URL`:
+
+```bash
+gh secret set ALERT_WEBHOOK_URL --repo webees/uptime-kuma
+```
+
+Every failure path in Validate, GHCR publish/deploy, upstream updates, deploy
+drift, GHCR cleanup, Automation Health and Dependabot auto-merge sends one JSON
+notification. The payload contains only the repository, workflow, run URL,
+branch, commit, conclusion and a short reason. It includes both `text` and
+`content` fields for common webhook receivers. If the secret is absent, the run
+prints an explicit skipped notice instead of claiming a notification was sent.
+
 Six workflows run without a human, and Dependabot updates the action pins:
 
 | Workflow | When | What it does |
@@ -294,6 +311,11 @@ python3.13 scripts/upstream_deps.py compare --uptime-version … --uptime-digest
   through SMTP and `backup-status.txt`; if SMTP is misconfigured the failure
   stays in the workflow-free cron log. The restore drill proves a snapshot is
   readable and consistent, not that the application boots against it.
+- `ALERT_WEBHOOK_URL` is not configured in this repository. If a workflow
+  fails, the notifier writes an explicit skipped notice and no external alert
+  is delivered; the failed run remains the only signal. Trigger: the repository
+  secret is absent. Observed by: `gh secret list` returning no
+  `ALERT_WEBHOOK_URL` entry.
 
 ## 📝 License
 

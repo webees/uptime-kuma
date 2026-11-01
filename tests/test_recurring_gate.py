@@ -468,11 +468,73 @@ def assert_caller_grants_the_called_permissions(
     caller = build.split("\n  validate:\n", 1)
     case.assertEqual(len(caller), 2, "the publish workflow has no validate job")
     job = caller[1].split("\n  build:", 1)[0]
+    # Repository secrets are not inherited by a called workflow implicitly. The
+    # validate failure notifier therefore sees an empty ALERT_WEBHOOK_URL on
+    # every publish unless the caller explicitly passes the repository secret.
+    case.assertIn(
+        "    secrets: inherit\n",
+        job,
+        "the caller does not pass repository secrets to validate.yml",
+    )
     block = permissions_block(job)
     case.assertTrue(block, f"the calling job grants nothing, so {sorted(wanted)} cannot be held")
     have = set(re.findall(r"(?m)^      ([a-z-]+): \S+$", block))
     for scope in sorted(wanted):
         case.assertIn(scope, have, f"the caller does not grant {scope} to validate.yml")
+
+
+def assert_failure_notifications_are_wired(
+    case: unittest.TestCase,
+    workflows: dict[str, str],
+    action: str,
+    readme: str,
+) -> None:
+    """A notification path that silently disappears is worse than none.
+
+    Every automated workflow has to call the shared notifier on failure or
+    cancellation. The action must fail closed for a malformed URL while making
+    an absent secret visibly skipped, and the README residual register must keep
+    that configuration gap observable.
+    """
+    expected = {
+        "automation-health.yml",
+        "deploy-drift.yml",
+        "dependabot-automerge.yml",
+        "ghcr-cleanup.yml",
+        "ghcr.yaml",
+        "upstream-updates.yml",
+        "validate.yml",
+    }
+    case.assertEqual(set(workflows), expected, "a workflow was added without notifier review")
+    for name, text in workflows.items():
+        case.assertIn(
+            "uses: ./.github/actions/notify-failure",
+            text,
+            f"{name} has no failure notifier",
+        )
+        case.assertIn(
+            "webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}",
+            text,
+            f"{name} does not read ALERT_WEBHOOK_URL",
+        )
+        case.assertTrue(
+            "if: always() && (failure() || cancelled())" in text
+            or "if: always() && (contains(needs.*.result, 'failure') || "
+               "contains(needs.*.result, 'cancelled'))" in text,
+            f"{name} does not notify after a failed or cancelled job",
+        )
+
+    # An absent secret is a visible configuration gap, not a success claim.
+    case.assertIn('if [ -z "${ALERT_WEBHOOK_URL:-}" ]; then', action)
+    case.assertIn("failure notification skipped", action)
+    case.assertIn("^https://[^[:space:]]+$", action)
+    case.assertIn("--retry 3 --retry-delay 2 --max-time 20", action)
+
+    residual = readme.split("\n## ⚠️ Residual risk\n", 1)
+    case.assertEqual(len(residual), 2, "the residual register is missing")
+    case.assertIn("`ALERT_WEBHOOK_URL` is not configured", residual[1])
+    case.assertIn("explicit skipped notice", residual[1])
+    case.assertIn("`gh secret list`", residual[1])
 
 
 def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -> None:
@@ -521,8 +583,16 @@ def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -
 
     # A skipped publish has nothing to compare; a cancelled one still might.
     case.assertIn("github.event.workflow_run.conclusion != 'skipped'", drift)
-    # The default-branch checkout must be moved to the published commit.
-    case.assertIn("ref: ${{ github.event.workflow_run.head_sha || github.sha }}", drift)
+    # The check executes the default branch's own configuration and script.
+    # A published SHA is event metadata only; checking it out lets a workflow
+    # with registry and Fly credentials execute event-selected code.
+    checkout = re.search(
+        r"(?ms)^\s+- name: 📥 Checkout repository\n(.*?)(?=^\s+- name:|\Z)",
+        drift,
+    )
+    case.assertIsNotNone(checkout, "deploy-drift has no checkout step")
+    case.assertNotIn("workflow_run.head_sha", checkout.group(0))
+    case.assertNotIn("ref:", checkout.group(0), "checkout must use the trusted default ref")
 
     # Ordering comes from `workflow_run`, so the group only orders checks and
     # must never drop the later, more relevant one.
@@ -2840,6 +2910,14 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_caller_grants_the_called_permissions(self, narrowed, validate)
 
+        # Third control: permissions are granted but secrets are not inherited,
+        # so the nested validate can run while its failure notifier stays dark.
+        secrets_lost = build.replace("    secrets: inherit\n", "", 1)
+        self.assertNotEqual(secrets_lost, build)
+        with self.assertRaises(AssertionError) as caught:
+            assert_caller_grants_the_called_permissions(self, secrets_lost, validate)
+        self.assertIn("repository secrets", str(caught.exception))
+
         # Mutation control: a step that checks a checked-out file instead of the
         # API body lets the PR carry a table nobody read. Both reads are API
         # reads now, so the control has to move every one of them.
@@ -2886,6 +2964,47 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(empty, validate)
         with self.assertRaises(AssertionError):
             assert_matrix_gate_is_wired(self, empty)
+
+    def test_failure_notifications_are_wired_and_honest(self) -> None:
+        workflows = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
+        }
+        action = (ROOT / ".github/actions/notify-failure/action.yml").read_text(
+            encoding="utf-8"
+        )
+        readme = README.read_text(encoding="utf-8")
+        assert_failure_notifications_are_wired(self, workflows, action, readme)
+
+        # Mutation control: a workflow that loses its notifier still looks
+        # automated, but an unattended failure now disappears from the alert
+        # channel.
+        missing = {**workflows, "validate.yml": workflows["validate.yml"].replace(
+            "uses: ./.github/actions/notify-failure", "run: echo skipped", 1
+        )}
+        self.assertNotEqual(missing["validate.yml"], workflows["validate.yml"])
+        with self.assertRaises(AssertionError) as caught:
+            assert_failure_notifications_are_wired(self, missing, action, readme)
+        self.assertIn("validate.yml has no failure notifier", str(caught.exception))
+
+        # Mutation control: removing the empty-secret branch makes a skipped
+        # notification continue into a request with no usable destination.
+        unguarded = action.replace('if [ -z "${ALERT_WEBHOOK_URL:-}" ]; then',
+                                   "if false; then", 1)
+        self.assertNotEqual(unguarded, action)
+        with self.assertRaises(AssertionError):
+            assert_failure_notifications_are_wired(self, workflows, unguarded, readme)
+
+        # Mutation control: deleting the residual hides the only remaining
+        # signal when the repository secret has not been configured.
+        undocumented = readme.replace(
+            "`ALERT_WEBHOOK_URL` is not configured", "The webhook is configured", 1
+        )
+        self.assertNotEqual(undocumented, readme)
+        with self.assertRaises(AssertionError):
+            assert_failure_notifications_are_wired(
+                self, workflows, action, undocumented
+            )
 
     def test_contract_mutation_removes_authoritative_field(self) -> None:
         text = DOC.read_text(encoding="utf-8")
@@ -3330,14 +3449,17 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_drift_check_exists(self, racing, build)
 
-        # Eighth control: keep the default-branch checkout, so a slower publish
-        # is compared against a newer tree than the one it built.
-        unmoved = drift.replace(
-            "          ref: ${{ github.event.workflow_run.head_sha || github.sha }}\n", "", 1
+        # Eighth control: restore checkout of event-selected code in a workflow
+        # that holds registry and Fly credentials.
+        untrusted = drift.replace(
+            "          persist-credentials: false\n",
+            "          ref: ${{ github.event.workflow_run.head_sha || github.sha }}\n"
+            "          persist-credentials: false\n",
+            1,
         )
-        self.assertNotEqual(unmoved, drift)
+        self.assertNotEqual(untrusted, drift)
         with self.assertRaises(AssertionError):
-            assert_drift_check_exists(self, unmoved, build)
+            assert_drift_check_exists(self, untrusted, build)
 
         # Ninth control: rename the publish workflow and leave the detector on
         # the old title. Nothing errors; the check simply stops being queued.

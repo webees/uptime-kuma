@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/deploy_drift.py"
+WORKFLOW = ROOT / ".github/workflows/deploy-drift.yml"
 
 SELF = "sha256:" + "a" * 64
 OTHER = "sha256:" + "b" * 64
@@ -57,6 +59,35 @@ def run(release_doc: object, status_doc: object, index_doc: object) -> subproces
             paths.append(str(path))
         return subprocess.run([sys.executable, str(SCRIPT), *paths],
                               capture_output=True, text=True, check=False)
+
+
+def assert_trusted_checkout(case: unittest.TestCase, workflow: str) -> None:
+    """The post-publish job must run the default branch's own check code."""
+    checkout = re.search(
+        r"(?ms)^\s+- name: 📥 Checkout repository\n(.*?)(?=^\s+- name:|\Z)",
+        workflow,
+    )
+    case.assertIsNotNone(checkout, "deploy-drift has no checkout step")
+    case.assertNotIn("workflow_run.head_sha", checkout.group(0))
+    case.assertNotIn("ref:", checkout.group(0), "checkout must use the trusted default ref")
+
+
+class DriftWorkflowTrustTest(unittest.TestCase):
+    def test_checkout_never_uses_the_publish_head(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        assert_trusted_checkout(self, workflow)
+
+        # Mutation control: restoring the published-head checkout puts
+        # privileged execution back on event-selected code.
+        untrusted = workflow.replace(
+            "          persist-credentials: false\n",
+            "          ref: ${{ github.event.workflow_run.head_sha || github.sha }}\n"
+            "          persist-credentials: false\n",
+            1,
+        )
+        self.assertNotEqual(untrusted, workflow)
+        with self.assertRaises(AssertionError):
+            assert_trusted_checkout(self, untrusted)
 
 
 class DeployDriftTest(unittest.TestCase):

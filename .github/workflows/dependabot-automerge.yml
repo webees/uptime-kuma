@@ -87,3 +87,15 @@ jobs:
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::invalid pull request head SHA" >&2; exit 1; }
           timeout 120 gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --squash --delete-branch --match-head-commit "$HEAD_SHA"
+
+      - name: 🚨 Notify dependency automation failure
+        if: always() && (failure() || cancelled())
+        uses: ./.github/actions/notify-failure
+        with:
+          webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}
+          workflow: ${{ github.workflow }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch: ${{ github.head_ref || github.ref_name }}
+          commit: ${{ github.event.pull_request.head.sha || github.sha }}
+          conclusion: ${{ job.status }}
+          reason: Dependabot validation, required check, or merge failed.

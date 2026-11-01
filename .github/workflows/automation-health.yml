@@ -68,3 +68,15 @@ jobs:
             --workflow ghcr.yaml=192 \
             --workflow deploy-drift.yml=48 \
             --workflow ghcr-cleanup.yml=48
+
+      - name: 🚨 Notify automation health failure
+        if: always() && (failure() || cancelled())
+        uses: ./.github/actions/notify-failure
+        with:
+          webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}
+          workflow: ${{ github.workflow }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch: ${{ github.ref_name }}
+          commit: ${{ github.sha }}
+          conclusion: ${{ job.status }}
+          reason: A watched workflow failed or a scheduled automation is disabled or overdue.

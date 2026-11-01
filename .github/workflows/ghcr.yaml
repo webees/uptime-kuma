@@ -108,6 +108,7 @@ jobs:
   # Nothing is published from a commit that failed its own gates.
   validate:
     uses: ./.github/workflows/validate.yml
+    secrets: inherit
     # A called workflow cannot grant itself more than the caller holds: asking
     # for `pull-requests: read` inside validate.yml made every publish die with
     # `startup_failure` (run 41080321915) while the PR-only run stayed green.
@@ -373,3 +374,27 @@ jobs:
             exit 1
           fi
           echo "promoted ${image}:latest -> ${index_digest} (amd64 ${AMD64_DIGEST})"
+
+  notify-failure:
+    needs: [rebuild_check, validate, build, deploy]
+    if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: 📥 Checkout notification action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 🚨 Notify publish failure
+        uses: ./.github/actions/notify-failure
+        with:
+          webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}
+          workflow: ${{ github.workflow }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch: ${{ github.ref_name }}
+          commit: ${{ github.sha }}
+          conclusion: failure
+          reason: Image validation, build, digest smoke test, deploy, or verification failed.

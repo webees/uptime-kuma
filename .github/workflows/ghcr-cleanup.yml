@@ -52,3 +52,15 @@ jobs:
           validate: true
           log-level: info
           dry-run: false
+
+      - name: 🚨 Notify cleanup failure
+        if: always() && (failure() || cancelled())
+        uses: ./.github/actions/notify-failure
+        with:
+          webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}
+          workflow: ${{ github.workflow }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch: ${{ github.ref_name }}
+          commit: ${{ github.sha }}
+          conclusion: ${{ job.status }}
+          reason: GHCR cleanup failed or validation of the deletion plan failed.
