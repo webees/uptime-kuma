@@ -1,5 +1,8 @@
 .DS_Store
 
+# Local-only round brief; never commit or push.
+GOAL.md
+
 *.log
 __pycache__/
 pr-body.md
