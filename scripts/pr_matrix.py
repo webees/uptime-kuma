@@ -471,6 +471,10 @@ def changes_problems(content: str, touched: list[str] | None) -> list[str]:
             for path in PATHLIKE.findall(bare)
             if f"{path.rstrip('.,;')}/" not in trees
         ]
+        # Root files such as `Dockerfile` have no extension and therefore no
+        # PATHLIKE shape. A backticked span is unambiguous, so accept it when
+        # it names a real file; prose still has to survive the path patterns.
+        found.extend((span, False) for span in SPAN.findall(bare) if Path(span).is_file())
         found.extend((path, True) for path in trees)
         return found
 

@@ -2406,6 +2406,22 @@ class RecurringContractTest(unittest.TestCase):
             run_matrix(partial, document, ["docs/target_mode.md"]).stderr,
         )
         self.assertEqual(run_matrix(partial, document, ["scripts/pr_matrix.py"]).returncode, 0)
+        # Extensionless root files are real changed paths too. The path pattern
+        # had no shape for `Dockerfile`, so a complete bullet could not cover a
+        # Dockerfile change even though the PR API reported it.
+        extensionless = good.replace(
+            "## Changes\n\nx", "## Changes\n\n- `Dockerfile`: rebuilt.", 1
+        )
+        self.assertEqual(
+            run_matrix(extensionless, document, ["Dockerfile"]).returncode, 0
+        )
+        without_extensionless = run_mutated_matrix(
+            extensionless,
+            document,
+            [("        found.extend((span, False) for span in SPAN.findall(bare) if Path(span).is_file())\n", "")],
+            ["Dockerfile"],
+        )
+        self.assertIn("does not name the touched file Dockerfile", without_extensionless.stderr)
         # Repository dotfiles are changed paths too. The extension-only file
         # shape read `.dockerignore` as prose, so a real change could not name
         # itself even when the bullet was complete.
