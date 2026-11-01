@@ -13,7 +13,7 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `ef05f8e` on 2026-11-01,
+Audit baseline: every commit reachable through `24caa92` on 2026-11-01,
 extending the previous baseline at `07ed144`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
