@@ -267,20 +267,24 @@ Six workflows run without a human, and Dependabot updates the action pins:
 
 | Workflow | When | What it does |
 | :--- | :--- | :--- |
-| `upstream-updates.yml` | daily `02:23` UTC | resolves the newest stable Uptime Kuma release, its image digest and the supercronic binaries, rewrites only those five `Dockerfile` pins, opens `deps/upstream`, runs `validate` on that branch, then merges and dispatches the publish chain |
+| `upstream-updates.yml` | daily `02:23` UTC | resolves the newest stable Uptime Kuma release, its image digest, the supercronic binaries and the explicit Node.js runtime packages, rewrites only the known `Dockerfile` pins, opens `deps/upstream`, runs `validate` on that branch, then merges and dispatches the publish chain |
 | `dependabot-automerge.yml` | when Dependabot opens or refreshes a PR | accepts only same-Action SHA/comment replacements, waits for the required `validate` check, then merges the action update directly |
 | `ghcr.yaml` | weekly `Mon 03:17` UTC, plus every push | probes the published image for pending OS packages, builds only when there is something to ship, smoke-tests and scans the digest, records its SBOM, deploys it to Fly, verifies the release and only then moves `latest` |
 | `deploy-drift.yml` | after every publish, daily `05:41` UTC | fails when production is not running the digest `latest` was promoted from |
 | `ghcr-cleanup.yml` | daily `03:00` UTC, plus every push | prunes untagged and stale tags without racing a publish |
 | `automation-health.yml` | daily `05:47` UTC, plus watched workflow completions | fails on a failed main-branch workflow, checks that every scheduled workflow is still active and recent, and fail-closes on missing or expiring deployment credentials and the alert webhook |
 
-`upstream-updates.yml` closes the last manual loop: the pins are read from
-GitHub releases and Docker Hub, not from memory. A stable upstream upgrade
-merges on its own once `validate` passes on the branch head, matching the
-Vaultwarden delivery model. A **downgrade** or unexpected **prerelease** stays
-open with the `needs-review` label. Merging dispatches `ghcr.yaml`, since a push
-made with `GITHUB_TOKEN` does not emit a workflow-triggering event; that run
-then builds, smoke-tests, deploys and verifies the new digest.
+`upstream-updates.yml` closes the last manual loop: image and tool pins are
+read from GitHub releases and Docker Hub, while direct Node.js versions come
+from the public npm registry and the four installer-only `tar` overrides stay
+equal to the direct `tar` pin. An npm pin that is already ahead of the
+registry's `latest` is retained rather than rolled back. A stable update merges
+on its own once `validate` passes on the branch head, matching the Vaultwarden
+delivery model. A **downgrade** or unexpected **prerelease** stays open with
+the `needs-review` label; a major npm update still has to pass the same full
+image/runtime gate before it can merge. Merging dispatches `ghcr.yaml`, since a
+push made with `GITHUB_TOKEN` does not emit a workflow-triggering event; that
+run then builds, smoke-tests, deploys and verifies the new digest.
 
 Its second job is one half of a watchdog pair. It checks `automation-health.yml`,
 `ghcr.yaml`, `deploy-drift.yml` and `ghcr-cleanup.yml`; `automation-health.yml`

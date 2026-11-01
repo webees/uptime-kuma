@@ -1,14 +1,13 @@
 name: ⬆️ Upstream Updates
 
-# Five pins move without anyone touching this repository: the Uptime Kuma
-# release, the digest of its image, the supercronic release, and the two
-# architecture checksums. Nothing read them on a schedule, so a security
-# release could sit unseen until a human opened the upstream page.
+# Five image/tool pins and the exact direct Node.js package pins move without
+# anyone touching this repository. Nothing read them on a schedule, so a
+# security release could sit unseen until a human opened the upstream page.
 #
-# The job resolves the public metadata, rewrites only the five pin lines,
-# validates the branch with the same `validate` workflow a human PR runs, and
-# merges it. `ghcr.yaml` is dispatched afterwards because a merge made with
-# `GITHUB_TOKEN` does not emit a workflow-triggering push.
+# The job resolves public release and npm registry metadata, rewrites only the
+# known pin lines, validates the branch with the same `validate` workflow a
+# human PR runs, and merges it. `ghcr.yaml` is dispatched afterwards because a
+# merge made with `GITHUB_TOKEN` does not emit a workflow-triggering push.
 on:
   schedule:
     - cron: '23 2 * * *'
@@ -58,6 +57,8 @@ jobs:
 
       - name: 📊 Compare against the Dockerfile
         id: compare
+        env:
+          NPM_VERSIONS_JSON: ${{ steps.pins.outputs.npm_versions }}
         run: |
           set -euo pipefail
           timeout 120 python3 scripts/upstream_deps.py \
@@ -66,7 +67,8 @@ jobs:
             --uptime-digest "${{ steps.pins.outputs.uptime_digest }}" \
             --supercronic-version "${{ steps.pins.outputs.supercronic_version }}" \
             --supercronic-sha-amd64 "${{ steps.pins.outputs.supercronic_sha_amd64 }}" \
-            --supercronic-sha-arm64 "${{ steps.pins.outputs.supercronic_sha_arm64 }}"
+            --supercronic-sha-arm64 "${{ steps.pins.outputs.supercronic_sha_arm64 }}" \
+            --npm-versions-json "$NPM_VERSIONS_JSON" | tee "$RUNNER_TEMP/pins.diff"
 
       - name: 🛑 Stop when the pins are current
         if: steps.compare.outputs.changed != 'true'
@@ -75,6 +77,8 @@ jobs:
       - name: ✏️ Apply the pins and push the branch
         id: branch
         if: steps.compare.outputs.changed == 'true'
+        env:
+          NPM_VERSIONS_JSON: ${{ steps.pins.outputs.npm_versions }}
         run: |
           set -euo pipefail
           python3 scripts/upstream_deps.py apply \
@@ -82,7 +86,8 @@ jobs:
             --uptime-digest "${{ steps.pins.outputs.uptime_digest }}" \
             --supercronic-version "${{ steps.pins.outputs.supercronic_version }}" \
             --supercronic-sha-amd64 "${{ steps.pins.outputs.supercronic_sha_amd64 }}" \
-            --supercronic-sha-arm64 "${{ steps.pins.outputs.supercronic_sha_arm64 }}"
+            --supercronic-sha-arm64 "${{ steps.pins.outputs.supercronic_sha_arm64 }}" \
+            --npm-versions-json "$NPM_VERSIONS_JSON"
           # Only the pin file may move: a script that rewrote something else
           # would smuggle an unrelated change past the diff review.
           git diff --name-only | sort > "$RUNNER_TEMP/changed.txt"
@@ -115,6 +120,12 @@ jobs:
             echo "| Uptime Kuma | \`${{ steps.pins.outputs.uptime_version }}\` |"
             echo "| Image digest | \`${{ steps.pins.outputs.uptime_digest }}\` |"
             echo "| supercronic | \`${{ steps.pins.outputs.supercronic_version }}\` |"
+            echo
+            echo "Compared pins:"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/pins.diff"
+            echo '```'
             echo
             echo "Bump: \`${{ steps.compare.outputs.bump }}\`. Merging builds a"
             echo "timestamped image, smoke-tests the published digest, deploys it"
