@@ -117,6 +117,8 @@ image and the `latest` amd64 child and fails on a difference. It is the only
 detector for the case above — a hand deploy, or a promotion that never happened
 — because CI itself is not involved in either. It is triggered by the publish
 workflow's *title*, so renaming that workflow means renaming the listener too.
+It checks only the trusted default branch's workflow, configuration and script;
+the completed publish SHA is never checked out or executed.
 
 ### CI Deploy Credential
 

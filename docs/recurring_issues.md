@@ -428,6 +428,10 @@ move separately and reading between them looks like a broken app; the first
 `main` push proved it by cancelling the publish run before any job started.
 `workflow_run` names its source by workflow title, so renaming the publish
 workflow without renaming the listener stops the check from ever being queued.
+The job deliberately runs the default branch's own workflow, `fly.toml`, and
+drift script. It never checks out `workflow_run.head_sha`; that SHA is event
+metadata only, because executing event-selected code with registry and Fly
+credentials is an untrusted checkout.
 
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
@@ -554,9 +558,10 @@ comparison, the attestation filter and the release cross-check independently.
 It has also caught a real one: a hand deploy of the previous digest failed the
 next run with `DRIFT: …615bbab9… but latest is …964758a0…`, and the redeployed
 digest turned the following run back to `in sync`.
-The workflow must trigger on the publish completing, not on the push, checkout
-the published commit, and queue rather than cancel; dropping the trigger, the
-`ref`, or the non-cancelling group each turns its own control red.
+The workflow must trigger on the publish completing, not on the push, execute
+the trusted default-branch check without checking out the published commit, and
+queue rather than cancel; dropping the trigger, restoring the untrusted `ref`,
+or making the group cancel each turns its own control red.
 `validate.yml` is both a `workflow_call` target and a standalone workflow, so
 its concurrency group must include the workflow name: keyed only on the ref,
 the nested copy and its standalone twin share a group under

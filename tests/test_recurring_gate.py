@@ -583,8 +583,16 @@ def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -
 
     # A skipped publish has nothing to compare; a cancelled one still might.
     case.assertIn("github.event.workflow_run.conclusion != 'skipped'", drift)
-    # The default-branch checkout must be moved to the published commit.
-    case.assertIn("ref: ${{ github.event.workflow_run.head_sha || github.sha }}", drift)
+    # The check executes the default branch's own configuration and script.
+    # A published SHA is event metadata only; checking it out lets a workflow
+    # with registry and Fly credentials execute event-selected code.
+    checkout = re.search(
+        r"(?ms)^\s+- name: 📥 Checkout repository\n(.*?)(?=^\s+- name:|\Z)",
+        drift,
+    )
+    case.assertIsNotNone(checkout, "deploy-drift has no checkout step")
+    case.assertNotIn("workflow_run.head_sha", checkout.group(0))
+    case.assertNotIn("ref:", checkout.group(0), "checkout must use the trusted default ref")
 
     # Ordering comes from `workflow_run`, so the group only orders checks and
     # must never drop the later, more relevant one.
@@ -3441,14 +3449,17 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_drift_check_exists(self, racing, build)
 
-        # Eighth control: keep the default-branch checkout, so a slower publish
-        # is compared against a newer tree than the one it built.
-        unmoved = drift.replace(
-            "          ref: ${{ github.event.workflow_run.head_sha || github.sha }}\n", "", 1
+        # Eighth control: restore checkout of event-selected code in a workflow
+        # that holds registry and Fly credentials.
+        untrusted = drift.replace(
+            "          persist-credentials: false\n",
+            "          ref: ${{ github.event.workflow_run.head_sha || github.sha }}\n"
+            "          persist-credentials: false\n",
+            1,
         )
-        self.assertNotEqual(unmoved, drift)
+        self.assertNotEqual(untrusted, drift)
         with self.assertRaises(AssertionError):
-            assert_drift_check_exists(self, unmoved, build)
+            assert_drift_check_exists(self, untrusted, build)
 
         # Ninth control: rename the publish workflow and leave the detector on
         # the old title. Nothing errors; the check simply stops being queued.
