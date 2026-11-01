@@ -134,15 +134,29 @@ the completed publish SHA is never checked out or executed.
 ### CI Deploy Credential
 
 The publish workflow deploys the exact digest with a token scoped to one app.
-Create it and store it once; rotating it is the same command:
+Create a 60-day token, store it as a secret, and record its UTC expiry in a
+repository variable so `automation-health.yml` can fail before a deploy discovers
+an expired credential halfway through a release:
 
 ```bash
-fly tokens create deploy -a bxx-uptime-kuma
+# The command prints the token once. Do not paste it into a log or commit it.
+fly tokens create deploy -a bxx-uptime-kuma --expiry 60d \
+  --name "github-actions-$(date +%Y%m%d)"
 gh secret set FLY_API_TOKEN --repo webees/uptime-kuma
+gh variable set FLY_API_TOKEN_EXPIRES_AT --repo webees/uptime-kuma \
+  --body "YYYY-MM-DDTHH:MM:SSZ"
 ```
 
+Replace the placeholder with the token's actual UTC expiry. The daily and manual
+Automation Health runs require a `FlyV1` token, require a timezone-qualified
+expiry, and keep the remaining lifetime between 30 and 90 days. They also
+require `ALERT_WEBHOOK_URL`, so an absent notification target is a red preflight
+rather than a silent skip. The checker never prints either credential.
+
 Keep the scope on `bxx-uptime-kuma`: a token minted for another app passes the
-`deploy` guard and then fails against the real one.
+`deploy` guard and then fails against the real one. To rotate safely, create the
+new token, update both repository settings, dispatch `automation-health.yml`,
+and revoke the old token only after the next verified deploy succeeds.
 
 ## 🛠️ Management & Operations
 
@@ -243,8 +257,11 @@ Every failure path in Validate, GHCR publish/deploy, upstream updates, deploy
 drift, GHCR cleanup, Automation Health and Dependabot auto-merge sends one JSON
 notification. The payload contains only the repository, workflow, run URL,
 branch, commit, conclusion and a short reason. It includes both `text` and
-`content` fields for common webhook receivers. If the secret is absent, the run
-prints an explicit skipped notice instead of claiming a notification was sent.
+`content` fields for common webhook receivers. A watched workflow reports its
+own failure; Automation Health does not send a second copy for that
+`workflow_run`. Scheduled and manual health runs fail closed when the secret is
+absent, and the failure path adds an explicit annotation instead of claiming a
+notification was sent.
 
 Six workflows run without a human, and Dependabot updates the action pins:
 
@@ -255,7 +272,7 @@ Six workflows run without a human, and Dependabot updates the action pins:
 | `ghcr.yaml` | weekly `Mon 03:17` UTC, plus every push | probes the published image for pending OS packages, builds only when there is something to ship, smoke-tests and scans the digest, records its SBOM, deploys it to Fly, verifies the release and only then moves `latest` |
 | `deploy-drift.yml` | after every publish, daily `05:41` UTC | fails when production is not running the digest `latest` was promoted from |
 | `ghcr-cleanup.yml` | daily `03:00` UTC, plus every push | prunes untagged and stale tags without racing a publish |
-| `automation-health.yml` | daily `05:47` UTC, plus watched workflow completions | fails on a failed main-branch workflow and checks that every scheduled workflow is still active and recent |
+| `automation-health.yml` | daily `05:47` UTC, plus watched workflow completions | fails on a failed main-branch workflow, checks that every scheduled workflow is still active and recent, and fail-closes on missing or expiring deployment credentials and the alert webhook |
 
 `upstream-updates.yml` closes the last manual loop: the pins are read from
 GitHub releases and Docker Hub, not from memory. A stable upstream upgrade

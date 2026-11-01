@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `9662ae2` on 2026-11-01,
-extending the previous baseline at `24caa92`. Every later round must extend that
+Audit baseline: every commit reachable through `14efaf1` on 2026-11-02,
+extending the previous baseline at `9662ae2`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -357,6 +357,22 @@ the application dependencies and that metadata remain loadable. On 2026-11-01,
 Trivy 0.70.0 reported `Node.js: 0` and the actionable gate exited `0` for
 `uptime-kuma:security-test-v3`; the Debian 12.15 result remained 354 HIGH and
 18 CRITICAL, all unfixed and explicitly retained in the full SARIF inventory.
+
+Deployment-credential history: the publish path could start a release with an
+expired or missing Fly token, and the notification action treated a missing
+webhook as a successful skip. The failure therefore surfaced only after a
+deploy had already begun, or not at all. Final decision: Automation Health's
+scheduled and manual runs require an app-scoped `FlyV1` token, a
+timezone-qualified expiry marker between 30 and 90 days away, and an HTTPS
+webhook. The checker emits only generic errors and never echoes either value.
+A watched workflow's own always-running notifier is the sole external alert for
+that source failure; Automation Health does not duplicate it. Authority:
+`scripts/check_automation_credentials.py:check` and
+`.github/workflows/automation-health.yml:Deployment credentials are present and within policy`.
+Mutation control:
+`tests/test_automation_credentials.py:test_webhook_anchor_mutation_turns_rejection_red`
+and `test_timezone_mutation_turns_rejection_red`; removing full-match or
+timezone enforcement makes the corresponding negative assertion fail.
 
 The publish workflow also carries one weekly `schedule`, so a base-image or
 OS-package fix can ship without a code change. Scheduled runs use `main` HEAD

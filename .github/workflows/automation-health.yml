@@ -56,6 +56,20 @@ jobs:
           fi
           echo "${WORKFLOW} finished successfully"
 
+      # The scheduled and manual runs are the fail-closed credential preflight.
+      # A completed workflow already reports its own failure through its notify
+      # step, so this checker intentionally does not run on `workflow_run`.
+      - name: 🔐 Deployment credentials are present and within policy
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_API_TOKEN_EXPIRES_AT: ${{ vars.FLY_API_TOKEN_EXPIRES_AT }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          timeout 30 python3 scripts/check_automation_credentials.py \
+            --require-fly --require-webhook
+
       # This list intentionally omits this file: `upstream-updates.yml` checks
       # this schedule, making the two watchdogs cover each other.
       - name: 🕒 Scheduled workflows are still active and current
@@ -70,7 +84,9 @@ jobs:
             --workflow ghcr-cleanup.yml=48
 
       - name: 🚨 Notify automation health failure
-        if: always() && (failure() || cancelled())
+        # Watched workflows have their own always-running notifier. Skipping
+        # this copy prevents two external alerts for one source failure.
+        if: always() && (failure() || cancelled()) && github.event_name != 'workflow_run'
         uses: ./.github/actions/notify-failure
         with:
           webhook-url: ${{ secrets.ALERT_WEBHOOK_URL }}
