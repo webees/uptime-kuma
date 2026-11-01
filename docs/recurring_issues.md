@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `8e00072` on 2026-11-02,
-extending the previous baseline at `14efaf1`. Every later round must extend that
+Audit baseline: every commit reachable through `691071e` on 2026-11-02,
+extending the previous baseline at `8e00072`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -163,22 +163,30 @@ temporary copy never survives either outcome.
 History: never established before this round; `restore` always overwrote
 `/app/data` in place with no drill and no confirmation.
 
-Final decision: the drill extracts into an isolated scratch directory and
-validates SQLite there, touching no production file. In-place restore requires
+Final decision: the drill extracts into an isolated scratch directory,
+validates SQLite there and then boots an isolated Uptime Kuma against a copy of
+the restored database. The boot copy deactivates every monitor before launch,
+so restored production state cannot execute checks or emit notifications. The
+drill requires `/` to return `302`, stops the process with a bounded TERM/KILL
+sequence and removes the app copy and log. In-place restore requires
 `RESTORE_CONFIRM=yes`, refuses a symlinked or non-regular live database, stages
 through `.restore`, and copies the current database to `kuma.db.previous` with
 `.backup` before the swap, so a restorable previous state survives it. Stale
 sidecars are dropped only at the swap, and a failed stage never touches the
 live file.
 
-Authority: `scripts/restic.sh:restore_test` and `scripts/restic.sh:restore`.
+Authority: `scripts/restic.sh:restore_test`,
+`scripts/restic.sh:verify_restored_app` and `scripts/restic.sh:restore`.
 
 Mutation control: `tests/runtime_smoke.py:check_restore_isolation` (drill
-retargeted at the live data directory).
+retargeted at the live data directory, then the boot check removed so a bare
+database passes integrity checking).
 
 Regression gate: isolated drill, missing confirmation refused, symlink refused,
-non-regular file refused, copy failure leaves the live database intact, and the
-rollback copy holds the pre-restore state after a successful swap.
+non-regular file refused, a consistent non-application database rejected, a
+valid database starts the app and answers `/` with `302`, copy failure leaves
+the live database intact, and the rollback copy holds the pre-restore state
+after a successful swap.
 
 ## Bounded Diagnostics
 
@@ -466,10 +474,15 @@ CI is the only supported release path, but nothing proved that production still
 matched it: a hand `fly deploy` builds the Dockerfile and reaches the machine
 with no digest gate, and a promotion that silently never ran looks identical
 from the outside. Final decision: `.github/workflows/deploy-drift.yml` reads the
-newest completed release, every machine image and the `latest` amd64 child after
-every publish and daily, and fails on any difference. Every read is bounded,
-and an unreadable document exits `2` rather than reading as "in sync"; the
-detector is after the fact by design, because a hand deploy cannot be blocked.
+newest completed release, every machine image and health, and the `latest`
+amd64 child after every publish and daily, and fails on any difference. Each
+machine must be `started`, report `host_status=ok`, and carry exactly one
+`health` check in `passing` state. Fly's health check is answered by Caddy, so
+the job also requires public `/health` to return `200` and `/` to return `302`
+with `Location: /dashboard`; otherwise a live proxy could hide a dead Uptime
+Kuma process. Every read is bounded, and an unreadable document exits `2`
+rather than reading as "in sync"; the detector is after the fact by design,
+because a hand deploy cannot be blocked.
 It runs on `workflow_run` rather than the push, because a release and a machine
 move separately and reading between them looks like a broken app; the first
 `main` push proved it by cancelling the publish run before any job started.
@@ -500,6 +513,11 @@ The recorded branch rule is `docs/branch_protection.json`, read by
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
 `tests/test_recurring_gate.py:test_latest_is_promoted_only_after_verification`;
+`tests/test_deploy_drift.py:DeployDriftMutationTest` removes the machine-state,
+host-health and passing-health guards independently and proves stopped,
+unhealthy and failing inputs then read as `in sync`;
+`tests/test_deploy_drift.py:test_public_probe_checks_the_application_not_only_caddy`
+accepts a different root status and proves the application probe turns red;
 `tests/test_automation_credentials.py:test_webhook_anchor_mutation_turns_rejection_red`,
 `tests/test_automation_credentials.py:test_timezone_mutation_turns_rejection_red`, and
 `tests/test_automation_credentials.py:test_failure_output_never_contains_credential_values`

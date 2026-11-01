@@ -35,7 +35,7 @@ def _load(path: Path) -> object:
 
 
 def deployed_image(releases: object, status: object) -> str:
-    """The digest every machine is running, checked against the newest release."""
+    """The digest and health every machine reports, checked against the release."""
     if not isinstance(status, dict):
         raise Unreadable("status is not an object")
     machines = status.get("Machines")
@@ -45,6 +45,24 @@ def deployed_image(releases: object, status: object) -> str:
     for machine in machines:
         if not isinstance(machine, dict):
             raise Unreadable("a machine is not an object")
+        if str(machine.get("state", "")).lower() != "started":
+            raise Unreadable(f"a machine is not started: {machine.get('state')!r}")
+        if str(machine.get("host_status", "")).lower() != "ok":
+            raise Unreadable(
+                f"a machine host is not healthy: {machine.get('host_status')!r}"
+            )
+        checks = machine.get("checks")
+        health = (
+            [
+                str(check.get("status", "")).lower()
+                for check in checks
+                if isinstance(check, dict) and check.get("name") == "health"
+            ]
+            if isinstance(checks, list)
+            else []
+        )
+        if health != ["passing"]:
+            raise Unreadable(f"a machine has no single passing health check: {health!r}")
         ref = machine.get("image_ref")
         if not isinstance(ref, dict):
             raise Unreadable("a machine carries no image_ref")

@@ -11,6 +11,22 @@ reference for shape, never a source of truth about this project. Facts come from
 the worktree, the workflows and the live application, not from an earlier
 summary.
 
+The mutable round brief lives in the ignored, local-only `GOAL.md` at the
+repository root. It is the only prompt artifact: read it at the start of every
+round, then overwrite it in place with the verified state, remaining work and
+approval boundaries before reporting completion. Do not append, create
+numbered variants, or repeat its body in chat. `阅读这个文件，并执行` means
+execute that file.
+
+Every completed round must leave a semantic delta in `GOAL.md`: advance on
+evidence, keep the same focus with a sharper failure condition, record the exact
+blocker, or replace the objective when the user changes it. A timestamp,
+counter, or rewording is not a delta.
+
+The quality contract in `GOAL.md` is durable. Updating `Current Focus` must not
+weaken or remove it, and a claim of completion must cite evidence from the
+current SHA.
+
 ## Hard rules
 
 - Answer in Chinese; commit messages, PR titles and PR bodies in English.
@@ -18,6 +34,10 @@ summary.
 - Create and edit files with `apply_patch` only. Shell may read, build, test and
   run `git`.
 - Never `git reset --hard`. Leave unrelated files alone.
+- Keep the local-only `GOAL.md` current by replacing its contents, never by
+  appending a new round beside it. Never stage, commit, push or include it in a
+  pull request.
+- Re-read `GOAL.md` after updating it and remove stale or contradictory text.
 - Tests run through `python3.13 -m unittest`. There is no `pytest`.
 - A green `validate` is not a deployment. After a merge, `deploy` is proven by
   the verification step and by re-reading `flyctl releases`/`status` with the

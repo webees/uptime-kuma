@@ -32,6 +32,8 @@ def releases(digest: str, status: str = "complete", version: int = 7) -> list[di
 def status(digest: str, **machine: object) -> dict:
     entry = {
         "state": "started",
+        "host_status": "ok",
+        "checks": [{"name": "health", "status": "passing"}],
         "image_ref": {"registry": "ghcr.io", "repository": "webees/uptime-kuma", "digest": digest},
     }
     entry.update(machine)
@@ -72,6 +74,19 @@ def assert_trusted_checkout(case: unittest.TestCase, workflow: str) -> None:
     case.assertNotIn("ref:", checkout.group(0), "checkout must use the trusted default ref")
 
 
+def assert_public_probe(case: unittest.TestCase, workflow: str) -> None:
+    """The public probe must cover both Caddy health and the application root."""
+    for fragment in (
+        'host="$(jq -r \'.Hostname // empty\' "$out/status.json")"',
+        '"${base}/health"',
+        'test "$health" = 200',
+        '"${base}/"',
+        'test "$root" = 302',
+        'test "$location" = /dashboard',
+    ):
+        case.assertIn(fragment, workflow)
+
+
 class DriftWorkflowTrustTest(unittest.TestCase):
     def test_checkout_never_uses_the_publish_head(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -88,6 +103,17 @@ class DriftWorkflowTrustTest(unittest.TestCase):
         self.assertNotEqual(untrusted, workflow)
         with self.assertRaises(AssertionError):
             assert_trusted_checkout(self, untrusted)
+
+    def test_public_probe_checks_the_application_not_only_caddy(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        assert_public_probe(self, workflow)
+
+        # Mutation control: accepting a different / status lets a broken app
+        # path read as healthy even though Caddy still answers /health.
+        mutated = workflow.replace('test "$root" = 302', 'test "$root" = 200', 1)
+        self.assertNotEqual(mutated, workflow)
+        with self.assertRaises(AssertionError):
+            assert_public_probe(self, mutated)
 
 
 class DeployDriftTest(unittest.TestCase):
@@ -128,6 +154,35 @@ class DeployDriftTest(unittest.TestCase):
         result = run(releases(SELF), two, index())
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("machines disagree", result.stderr)
+
+    def test_machine_must_be_started_and_healthy(self) -> None:
+        cases = (
+            ("stopped", status(SELF, state="stopped"), "not started"),
+            ("unhealthy host", status(SELF, host_status="degraded"), "host is not healthy"),
+            ("missing checks", status(SELF, checks=None), "no single passing health check"),
+            ("empty checks", status(SELF, checks=[]), "no single passing health check"),
+            (
+                "failing health",
+                status(SELF, checks=[{"name": "health", "status": "critical"}]),
+                "no single passing health check",
+            ),
+            (
+                "duplicate health",
+                status(
+                    SELF,
+                    checks=[
+                        {"name": "health", "status": "passing"},
+                        {"name": "health", "status": "passing"},
+                    ],
+                ),
+                "no single passing health check",
+            ),
+        )
+        for label, machine, message in cases:
+            with self.subTest(label):
+                result = run(releases(SELF), machine, index())
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn(message, result.stderr)
 
     def test_unreadable_input_fails_closed(self) -> None:
         for label, args in (
@@ -214,6 +269,51 @@ class DeployDriftMutationTest(unittest.TestCase):
         # agree, so only the release comparison can see the gap.
         moved = dict(drift, index_doc=index(OTHER))
         result = self.mutate(("if newest.get(\"ImageRef\") != running:", "if False:"), **moved)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_without_the_machine_state_guard_a_stopped_machine_passes(self) -> None:
+        stopped = dict(
+            release_doc=releases(SELF),
+            status_doc=status(SELF, state="stopped"),
+            index_doc=index(SELF),
+        )
+        guarded = self.mutate(**stopped)
+        self.assertEqual(guarded.returncode, 2, guarded.stderr)
+
+        result = self.mutate(
+            ('if str(machine.get("state", "")).lower() != "started":', "if False:"),
+            **stopped,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_without_the_host_guard_an_unhealthy_machine_passes(self) -> None:
+        unhealthy = dict(
+            release_doc=releases(SELF),
+            status_doc=status(SELF, host_status="degraded"),
+            index_doc=index(SELF),
+        )
+        guarded = self.mutate(**unhealthy)
+        self.assertEqual(guarded.returncode, 2, guarded.stderr)
+
+        result = self.mutate(
+            ('if str(machine.get("host_status", "")).lower() != "ok":', "if False:"),
+            **unhealthy,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_without_the_health_guard_a_failing_machine_passes(self) -> None:
+        failing = dict(
+            release_doc=releases(SELF),
+            status_doc=status(
+                SELF,
+                checks=[{"name": "health", "status": "critical"}],
+            ),
+            index_doc=index(SELF),
+        )
+        guarded = self.mutate(**failing)
+        self.assertEqual(guarded.returncode, 2, guarded.stderr)
+
+        result = self.mutate(('if health != ["passing"]:', "if False:"), **failing)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

@@ -192,6 +192,11 @@ verifies it, copies the current database to `kuma.db.previous`, swaps, then
 requires an application restart. Keep that rollback copy until the instance is
 confirmed healthy.
 
+`restore-test` also starts an isolated Uptime Kuma against a copy of the
+restored database and requires `/` to return `302`. Monitors are deactivated in
+that copy before launch, and the process is stopped before the drill returns,
+so the check does not run production monitors or emit notifications.
+
 Every run also compares the recorded `last_success` against the wall clock. When
 the last good backup is older than `RESTIC_STALE_HOURS` (default `26`, at most
 `8760`), the run still proceeds but warns on stderr and mails
@@ -341,8 +346,9 @@ python3.13 scripts/upstream_deps.py compare --uptime-version … --uptime-digest
   resolved `latest` through Fly itself and failed there first.
 - `check-freshness` fails the scheduled run and mails, but it can only report
   through SMTP and `backup-status.txt`; if SMTP is misconfigured the failure
-  stays in the workflow-free cron log. The restore drill proves a snapshot is
-  readable and consistent, not that the application boots against it.
+  stays in the workflow-free cron log. Runtime smoke now proves the restored
+  database can boot the application, but no production snapshot has yet been
+  exercised through the new drill.
 - `ALERT_WEBHOOK_URL` is not configured in this repository. If a workflow
   fails, the notifier writes an explicit skipped notice and no external alert
   is delivered; the failed run remains the only signal. Trigger: the repository

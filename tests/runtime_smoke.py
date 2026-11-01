@@ -510,10 +510,12 @@ def check_restore_isolation(image: str) -> None:
     root = workspace()
     result = run(
         image,
+        "cp /app/db/kuma.db /w/data/kuma.db\n"
         "sqlite3 /w/data/kuma.db 'create table t(v); insert into t values(42);'\n"
         "/restic.sh backup >/dev/null 2>&1 || exit 1\n"
         "sqlite3 /w/data/kuma.db 'create table live_only(v)'\n"
         "/restic.sh restore-test >/tmp/drill 2>&1 || { cat /tmp/drill >&2; exit 1; }\n"
+        "grep 'Restore app check: / returned HTTP 302' /tmp/drill\n"
         "printf '@ live=%s\\n' \"$(sqlite3 /w/data/kuma.db \"select count(*) from sqlite_master where name='live_only'\")\"\n"
         "printf '@ drill=%s\\n' \"$(sqlite3 /tmp/restic-restore-test/w/data/backup.bak 'select count(*) from t')\"\n",
         root,
@@ -524,6 +526,26 @@ def check_restore_isolation(image: str) -> None:
         ["@ live=1", "@ drill=1"],
         probes(result),
     )
+    suite.same(
+        "C4 restored database boots the application and answers /",
+        True,
+        "Restore app check: / returned HTTP 302" in result.output,
+    )
+
+    # SQLite integrity alone cannot prove that Uptime Kuma can use the file.
+    # A bare database passes integrity_check but has none of the application's
+    # schema, so the boot check must fail closed.
+    root = workspace()
+    result = run(
+        image,
+        "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+        "/restic.sh backup >/dev/null 2>&1 || exit 1\n"
+        "rc=0; /restic.sh restore-test >/dev/null 2>&1 || rc=$?\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n",
+        root,
+    )
+    expect_pass(suite, result, "C4 unusable-schema drill completes", "C4 unusable-schema drill failed")
+    suite.same("C4 a non-application database fails the boot check", ["@ rc=2"], probes(result))
 
     root = workspace()
     result = run(
@@ -617,6 +639,7 @@ def check_restore_isolation(image: str) -> None:
         control_root = workspace()
         control = run(
             image,
+            "cp /app/db/kuma.db /w/data/kuma.db\n"
             "sqlite3 /w/data/kuma.db 'create table t(v); insert into t values(1);'\n"
             "/restic.sh backup >/dev/null 2>&1 || exit 1\n"
             "sqlite3 /w/data/kuma.db 'create table live_only(v)'\n"
@@ -629,6 +652,29 @@ def check_restore_isolation(image: str) -> None:
         suite.same(
             "C4 mutation: drill retargeted at live data overwrites it",
             ["@ live_only=0"],
+            probes(control),
+        )
+
+    with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
+        no_boot_check = mutate(
+            RESTIC,
+            (('verify_restored_app "$restored" "$target" || return 2', ':'),),
+            Path(tmp),
+        )
+        control_root = workspace()
+        control = run(
+            image,
+            "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+            "/restic.sh backup >/dev/null 2>&1 || exit 1\n"
+            "rc=0; /restic.sh restore-test >/dev/null 2>&1 || rc=$?\n"
+            "printf '@ rc=%s\\n' \"$rc\"\n",
+            control_root,
+            source=no_boot_check,
+        )
+        expect_pass(suite, control, "C4 boot-check mutation runs", "C4 boot-check mutation failed")
+        suite.same(
+            "C4 mutation: without the boot check an unusable database passes",
+            ["@ rc=0"],
             probes(control),
         )
 
