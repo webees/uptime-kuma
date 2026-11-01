@@ -579,8 +579,16 @@ def assert_upstream_updates_are_bounded(case: unittest.TestCase, updates: str) -
 
     # The API reading and the file rewriting live in one tested script, so the
     # workflow cannot drift into unvalidated inline edits.
-    case.assertIn("python3 scripts/upstream_deps.py resolve", updates)
-    case.assertIn("python3 scripts/upstream_deps.py compare", updates)
+    # `--github-output` belongs to the top-level parser. Putting it after the
+    # subcommand passes review but fails before the first network request.
+    case.assertIn(
+        'python3 scripts/upstream_deps.py \\\n            --github-output "$GITHUB_OUTPUT" resolve',
+        updates,
+    )
+    case.assertIn(
+        'python3 scripts/upstream_deps.py \\\n            --github-output "$GITHUB_OUTPUT" compare',
+        updates,
+    )
     case.assertIn("python3 scripts/upstream_deps.py apply", updates)
     case.assertNotIn("sed -i", updates)
 
@@ -3348,6 +3356,17 @@ class RecurringContractTest(unittest.TestCase):
         assert_schedules_are_watched(self, updates)
         assert_automation_health_is_independent(self, health)
         assert_action_updates_are_scheduled(self, dependabot)
+
+        # Mutation control: move the global output option behind `resolve` and
+        # the workflow exits 2 before it can read a single upstream release.
+        misordered = updates.replace(
+            'python3 scripts/upstream_deps.py \\\n            --github-output "$GITHUB_OUTPUT" resolve',
+            'python3 scripts/upstream_deps.py resolve \\\n            --github-output "$GITHUB_OUTPUT"',
+            1,
+        )
+        self.assertNotEqual(misordered, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, misordered)
 
         # Mutation control 1: merge without pinning the SHA the checks ran
         # against, so a branch that moved in between merges untested.

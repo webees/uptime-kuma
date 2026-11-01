@@ -53,20 +53,20 @@ jobs:
         id: pins
         run: |
           set -euo pipefail
-          timeout 300 python3 scripts/upstream_deps.py resolve \
-            --github-output "$GITHUB_OUTPUT"
+          timeout 300 python3 scripts/upstream_deps.py \
+            --github-output "$GITHUB_OUTPUT" resolve
 
       - name: 📊 Compare against the Dockerfile
         id: compare
         run: |
           set -euo pipefail
-          timeout 120 python3 scripts/upstream_deps.py compare \
+          timeout 120 python3 scripts/upstream_deps.py \
+            --github-output "$GITHUB_OUTPUT" compare \
             --uptime-version "${{ steps.pins.outputs.uptime_version }}" \
             --uptime-digest "${{ steps.pins.outputs.uptime_digest }}" \
             --supercronic-version "${{ steps.pins.outputs.supercronic_version }}" \
             --supercronic-sha-amd64 "${{ steps.pins.outputs.supercronic_sha_amd64 }}" \
-            --supercronic-sha-arm64 "${{ steps.pins.outputs.supercronic_sha_arm64 }}" \
-            --github-output "$GITHUB_OUTPUT"
+            --supercronic-sha-arm64 "${{ steps.pins.outputs.supercronic_sha_arm64 }}"
 
       - name: 🛑 Stop when the pins are current
         if: steps.compare.outputs.changed != 'true'
