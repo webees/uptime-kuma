@@ -463,8 +463,10 @@ port invariant is controlled inside
 `tests/test_recurring_gate.py:test_listen_port_is_unprivileged_and_matches_fly`,
 which rewrites the listener back to 80 and drifts `internal_port` to 8081.
 A bare SHA is immutable but unreadable, so each pin also carries its release as
-a trailing comment; the same test deletes one comment while keeping the SHA,
-which only the readability rule can catch.
+a trailing comment. `tests/test_recurring_gate.py:test_every_action_is_pinned_to_a_commit`
+locates the current checkout pin in the workflow, replaces it with a floating
+tag, then deletes its version comment while keeping the SHA; only the matching
+rule catches each mutation.
 The required check is one of these reachability questions: renaming the
 `validate` job, or the workflow that supplies half of its reported context,
 leaves a requirement nothing can satisfy.
