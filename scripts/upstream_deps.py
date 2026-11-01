@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """Resolve, compare and apply the pinned upstream dependencies.
 
-`Dockerfile` pins five moving values: the Uptime Kuma release, the digest of
-that release's image, the supercronic release, and the two per-architecture
-checksums. A human cannot keep reading those sources every day, and a stale pin
-means security fixes never reach the image.
+`Dockerfile` pins five moving image/tool values and the exact direct Node.js
+runtime packages installed on top of the upstream release. The tar overrides
+for installer-only trees move with the direct `tar` pin. A human cannot keep
+reading those public sources every day, and a stale pin means security fixes
+never reach the image.
 
     upstream_deps.py resolve [--github-output PATH]
     upstream_deps.py compare --uptime-version V --uptime-digest D ...
     upstream_deps.py apply   --uptime-version V --uptime-digest D ...
 
-`resolve` reads the public release metadata. `compare` prints the pins that
-differ and classifies the largest bump as `patch`, `minor`, `major` or
-`prerelease`, which is what the workflow's auto-merge policy keys on. `apply`
-rewrites only the five lines the pins live on and refuses a Dockerfile whose
-shape no longer matches, so a renamed ARG cannot be silently left behind.
+`resolve` reads the public release and npm registry metadata. `compare` prints
+the pins that differ and classifies the largest bump as `patch`, `minor`,
+`major` or `prerelease`, which is what the workflow's auto-merge policy keys
+on. `apply` rewrites only the known pin lines and refuses a Dockerfile whose
+shape no longer matches, so a renamed package cannot be silently left behind.
 
 Exit codes: `0` success, `1` a refusal, `2` usage.
 """
@@ -28,6 +29,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -43,8 +45,38 @@ MAX_ASSET_BYTES = 64 * 1024 * 1024
 
 VERSION = re.compile(r"^[0-9]+\.[0-9]+(?:\.[0-9]+)+(?:-[0-9A-Za-z.]+)?$")
 STABLE = re.compile(r"^[0-9]+\.[0-9]+(?:\.[0-9]+)+$")
+NPM_STABLE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 CHECKSUM = re.compile(r"^[0-9a-f]{64}$")
+
+# These are the packages the Dockerfile installs with `--save-exact` after the
+# upstream image is built. Keep this list explicit: resolving every entry in an
+# inherited package.json would silently expand the writable update surface.
+DIRECT_NPM_PACKAGES = (
+    "@azure/identity",
+    "@azure/msal-node",
+    "@grpc/grpc-js",
+    "axios",
+    "body-parser",
+    "follow-redirects",
+    "liquidjs",
+    "mysql2",
+    "nodemailer",
+    "protobufjs",
+    "redbean-node",
+    "tar",
+    "ws",
+)
+
+# Each key names a package whose installer-only tar dependency is overridden.
+# The value is the same direct `tar` pin, so one resolved version keeps the
+# runtime install tree coherent.
+TAR_OVERRIDE_PACKAGES = (
+    "@louislam/sqlite3",
+    "@mapbox/node-pre-gyp",
+    "node-gyp",
+    "cacache",
+)
 
 
 class Refused(Exception):
@@ -181,6 +213,27 @@ def supercronic_release() -> tuple[str, dict[str, str]]:
     return tag, sums
 
 
+def npm_latest(package: str) -> str:
+    """The stable version npm currently publishes on the `latest` dist-tag."""
+    encoded = urllib.parse.quote(package, safe="@")
+    metadata = fetch_json(f"https://registry.npmjs.org/{encoded}/latest")
+    if not isinstance(metadata, dict):
+        raise Refused(f"npm registry response for {package} is not an object")
+    if metadata.get("name") != package:
+        raise Refused(f"npm registry returned the wrong package for {package}")
+    if metadata.get("deprecated"):
+        raise Refused(f"npm latest version for {package} is deprecated")
+    version = metadata.get("version")
+    if not isinstance(version, str) or not NPM_STABLE.match(version):
+        raise Refused(f"npm latest version for {package} is not stable: {version!r}")
+    return version
+
+
+def npm_versions() -> dict[str, str]:
+    """Resolve every direct runtime package through its public `latest` tag."""
+    return {package: npm_latest(package) for package in DIRECT_NPM_PACKAGES}
+
+
 def numeric(tag: str) -> tuple[int, ...]:
     return tuple(int(part) for part in tag.lstrip("v").split("."))
 
@@ -217,6 +270,30 @@ REWRITES = {
     "supercronic_sha_arm64": "ARG SUPERCRONIC_SHA256_arm64={value}",
 }
 
+NPM_PATTERNS = {
+    package: re.compile(
+        rf"(?m)^        {re.escape(package)}@(?P<v>[0-9]+\.[0-9]+\.[0-9]+)[ \t]*\\$"
+    )
+    for package in DIRECT_NPM_PACKAGES
+}
+
+NPM_OVERRIDE_PATTERNS = {
+    package: re.compile(
+        rf'(?m)^        "overrides\.{re.escape(package)}\.tar='
+        rf'(?P<v>[0-9]+\.[0-9]+\.[0-9]+)"[ \t]*\\$'
+    )
+    for package in TAR_OVERRIDE_PACKAGES
+}
+
+NPM_REWRITES = {
+    package: f"        {package}@{{value}} \\" for package in DIRECT_NPM_PACKAGES
+}
+
+NPM_OVERRIDE_REWRITES = {
+    package: f'        "overrides.{package}.tar={{value}}" \\'
+    for package in TAR_OVERRIDE_PACKAGES
+}
+
 
 def current() -> dict[str, str]:
     """The five pins as the Dockerfile states them today."""
@@ -228,6 +305,49 @@ def current() -> dict[str, str]:
             raise Refused(f"{DOCKERFILE} names {name} {len(matches)} times, expected once")
         found[name] = matches[0]
     return found
+
+
+def current_npm(text: str | None = None) -> tuple[dict[str, str], dict[str, str]]:
+    """The direct npm pins and installer-only tar overrides in the Dockerfile."""
+    if text is None:
+        text = DOCKERFILE.read_text(encoding="utf-8")
+    direct: dict[str, str] = {}
+    for package, pattern in NPM_PATTERNS.items():
+        matches = pattern.findall(text)
+        if len(matches) != 1:
+            raise Refused(f"{DOCKERFILE} names npm package {package} {len(matches)} times, expected once")
+        direct[package] = matches[0]
+    overrides: dict[str, str] = {}
+    for package, pattern in NPM_OVERRIDE_PATTERNS.items():
+        matches = pattern.findall(text)
+        if len(matches) != 1:
+            raise Refused(f"{DOCKERFILE} names tar override {package} {len(matches)} times, expected once")
+        overrides[package] = matches[0]
+    expected_tar = direct["tar"]
+    divergent = {package: value for package, value in overrides.items() if value != expected_tar}
+    if divergent:
+        raise Refused(f"{DOCKERFILE} tar overrides disagree with tar {expected_tar}: {divergent}")
+    return direct, overrides
+
+
+def parse_npm_versions(raw: str) -> dict[str, str]:
+    """Validate the compact JSON emitted by the workflow resolver."""
+    if len(raw.encode("utf-8")) > 16 * 1024:
+        raise Refused("npm version JSON is oversized")
+    try:
+        values = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise Refused(f"npm version JSON is malformed: {error}") from error
+    if not isinstance(values, dict):
+        raise Refused("npm version JSON is not an object")
+    if set(values) != set(DIRECT_NPM_PACKAGES):
+        missing = sorted(set(DIRECT_NPM_PACKAGES) - set(values))
+        extra = sorted(set(values) - set(DIRECT_NPM_PACKAGES))
+        raise Refused(f"npm version JSON keys differ (missing={missing}, extra={extra})")
+    for package, version in values.items():
+        if not isinstance(version, str) or not NPM_STABLE.match(version):
+            raise Refused(f"npm package {package} has invalid version {version!r}")
+    return values
 
 
 def valid(name: str, value: str) -> bool:
@@ -242,7 +362,7 @@ def valid(name: str, value: str) -> bool:
 
 def bump_kind(name: str, have: str, want: str) -> str:
     """How much a single changed pin moved, from the pinned value's view."""
-    if name not in ("uptime_version", "supercronic_version"):
+    if name not in ("uptime_version", "supercronic_version", *DIRECT_NPM_PACKAGES):
         return "patch"
     old = re.split(r"[-+]", have, maxsplit=1)[0].split(".")
     new = re.split(r"[-+]", want, maxsplit=1)[0].split(".")
@@ -262,7 +382,44 @@ def bump_kind(name: str, have: str, want: str) -> str:
 ORDER = {"patch": 0, "minor": 1, "major": 2, "prerelease": 3, "downgrade": 4}
 
 
-def compare(want: dict[str, str], out: Path | None) -> int:
+def compare_npm(
+    want: dict[str, str], have: tuple[dict[str, str], dict[str, str]]
+) -> tuple[bool, str]:
+    """Compare direct packages and keep every tar override tied to `tar`."""
+    direct, overrides = have
+    changed = False
+    biggest = "patch"
+    for package in DIRECT_NPM_PACKAGES:
+        value = want[package]
+        if direct[package] == value:
+            print(f"ok   npm {package}")
+            continue
+        kind = bump_kind(package, direct[package], value)
+        if kind == "downgrade":
+            print(f"ok   npm {package} {direct[package]} is ahead of latest {value}")
+            continue
+        changed = True
+        print(f"diff npm {package}: {direct[package]} -> {value}")
+        biggest = max(biggest, kind, key=lambda item: ORDER[item])
+    expected_tar = want["tar"]
+    if bump_kind("tar", direct["tar"], expected_tar) == "downgrade":
+        for package in TAR_OVERRIDE_PACKAGES:
+            print(f"ok   npm override {package}.tar follows ahead-of-latest tar {direct['tar']}")
+        return changed, biggest
+    for package in TAR_OVERRIDE_PACKAGES:
+        if overrides[package] == expected_tar:
+            print(f"ok   npm override {package}.tar")
+            continue
+        changed = True
+        print(f"diff npm override {package}.tar: {overrides[package]} -> {expected_tar}")
+        kind = bump_kind("tar", overrides[package], expected_tar)
+        biggest = max(biggest, kind, key=lambda item: ORDER[item])
+    return changed, biggest
+
+
+def compare(
+    want: dict[str, str], npm_want: dict[str, str] | None, out: Path | None
+) -> int:
     have = current()
     changed = False
     biggest = "patch"
@@ -276,12 +433,18 @@ def compare(want: dict[str, str], out: Path | None) -> int:
         print(f"diff {name}: {have[name]} -> {want[name]}")
         kind = bump_kind(name, have[name], want[name])
         biggest = max(biggest, kind, key=lambda item: ORDER[item])
+    if npm_want is not None:
+        npm_changed, npm_bump = compare_npm(npm_want, current_npm())
+        changed = changed or npm_changed
+        biggest = max(biggest, npm_bump, key=lambda item: ORDER[item])
     emit("changed", "true" if changed else "false", out)
     emit("bump", biggest, out)
     return 0
 
 
-def apply(want: dict[str, str], out: Path | None) -> int:
+def apply(
+    want: dict[str, str], npm_want: dict[str, str] | None, out: Path | None
+) -> int:
     text = DOCKERFILE.read_text(encoding="utf-8")
     for name, pattern in PINS.items():
         value = want[name]
@@ -291,6 +454,21 @@ def apply(want: dict[str, str], out: Path | None) -> int:
         text, count = pattern.subn(replacement, text, count=1)
         if count != 1:
             raise Refused(f"{DOCKERFILE} no longer names {name} exactly once")
+    if npm_want is not None:
+        current_direct, _ = current_npm(text)
+        for package in DIRECT_NPM_PACKAGES:
+            if bump_kind(package, current_direct[package], npm_want[package]) == "downgrade":
+                raise Refused(f"refusing to downgrade npm package {package}")
+        for package in DIRECT_NPM_PACKAGES:
+            replacement = NPM_REWRITES[package].format(value=npm_want[package])
+            text, count = NPM_PATTERNS[package].subn(lambda _: replacement, text, count=1)
+            if count != 1:
+                raise Refused(f"{DOCKERFILE} no longer names npm package {package} exactly once")
+        for package in TAR_OVERRIDE_PACKAGES:
+            replacement = NPM_OVERRIDE_REWRITES[package].format(value=npm_want["tar"])
+            text, count = NPM_OVERRIDE_PATTERNS[package].subn(lambda _: replacement, text, count=1)
+            if count != 1:
+                raise Refused(f"{DOCKERFILE} no longer names tar override {package} exactly once")
     DOCKERFILE.write_text(text, encoding="utf-8")
     print(f"updated {DOCKERFILE}")
     emit("applied", "true", out)
@@ -306,10 +484,12 @@ def main(argv: list[str]) -> int:
         sub = commands.add_parser(name)
         for pin in PINS:
             sub.add_argument(f"--{pin.replace('_', '-')}", required=True)
+        sub.add_argument("--npm-versions-json")
     args = parser.parse_args(argv)
     if args.command == "resolve":
         version = upstream_release()
         tag, sums = supercronic_release()
+        packages = npm_versions()
         values = {
             "uptime_version": version,
             "uptime_digest": release_digest(version),
@@ -319,11 +499,21 @@ def main(argv: list[str]) -> int:
         }
         for name, value in values.items():
             emit(name, value, args.github_output)
+        emit(
+            "npm_versions",
+            json.dumps(packages, separators=(",", ":"), sort_keys=True),
+            args.github_output,
+        )
         return 0
     want = {name: getattr(args, name) for name in PINS}
+    npm_want = (
+        parse_npm_versions(args.npm_versions_json)
+        if args.npm_versions_json is not None
+        else None
+    )
     if args.command == "compare":
-        return compare(want, args.github_output)
-    return apply(want, args.github_output)
+        return compare(want, npm_want, args.github_output)
+    return apply(want, npm_want, args.github_output)
 
 
 if __name__ == "__main__":

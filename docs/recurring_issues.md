@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `14efaf1` on 2026-11-02,
-extending the previous baseline at `9662ae2`. Every later round must extend that
+Audit baseline: every commit reachable through `8e00072` on 2026-11-02,
+extending the previous baseline at `14efaf1`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -387,14 +387,19 @@ carries a `mode` choice: `force` (default) publishes unconditionally and `probe`
 runs the scheduled decision, which keeps the skip path exercisable on demand.
 
 Moving pins had no scheduled owner either. The base-image version and digest,
-the supercronic release, and both architecture checksums could stay stale even
-while every workflow was green. Final decision: `upstream-updates.yml` resolves
-those five values daily through the bounded, tested `scripts/upstream_deps.py`,
-rewrites only `Dockerfile`, pushes `deps/upstream`, dispatches `validate` on
-that exact SHA, and merges a stable upgrade after the run succeeds, matching the
-Vaultwarden delivery model. A prerelease or downgrade stays open with
-`needs-review`. The merge explicitly dispatches `ghcr.yaml`, because a push made
-with `GITHUB_TOKEN` does not create a workflow-triggering event.
+the supercronic release, both architecture checksums, and the explicit direct
+Node.js runtime packages could stay stale even while every workflow was green.
+Final decision: `upstream-updates.yml` resolves those values daily through the
+bounded, tested `scripts/upstream_deps.py`, rewrites only `Dockerfile`, pushes
+`deps/upstream`, dispatches `validate` on that exact SHA, and merges a stable
+upgrade after the run succeeds, matching the Vaultwarden delivery model. The
+resolver keeps the four installer-only `tar` overrides equal to the direct
+`tar` pin. An npm pin already ahead of the registry's `latest` is retained
+instead of being rolled back. A prerelease or downgrade stays open with
+`needs-review`; major npm updates are not rejected by version number alone and
+must pass the full image/runtime gate before merging. The merge explicitly
+dispatches `ghcr.yaml`, because a push made with `GITHUB_TOKEN` does not
+create a workflow-triggering event.
 
 An automated update still needs an owner when its own schedule disappears.
 `upstream-updates.yml` and `automation-health.yml` therefore watch each other
