@@ -60,6 +60,10 @@ CLASS_EVIDENCE = {
         "scripts/restic.sh:trim_logs",
         "tests/runtime_smoke.py:check_bounded_diagnostics",
     ),
+    "Backup Invocation Privilege": (
+        "scripts/restic.sh:require_unprivileged",
+        "tests/runtime_smoke.py:check_process_supervision",
+    ),
     "State, Lock And Process Supervision": (
         "scripts/services.sh:supervise",
         "tests/runtime_smoke.py:check_process_supervision",

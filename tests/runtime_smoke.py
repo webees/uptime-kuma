@@ -174,6 +174,7 @@ def run(
     source: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> Case:
+    os.chmod(root, 0o777)
     return case(
         image,
         script,
@@ -181,6 +182,7 @@ def run(
         binds=(f"{root}:/w",),
         prepare=PREPARE,
         source=source,
+        user="node",
     )
 
 
@@ -727,6 +729,7 @@ def check_bounded_diagnostics(image: str) -> None:
         ("C5 negative directory cap", "RESTIC_LOG_DIR_MAX_BYTES", "-1"),
     ):
         invalid = workspace()
+        os.chmod(invalid, 0o777)
         result = case(
             image,
             "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
@@ -734,6 +737,7 @@ def check_bounded_diagnostics(image: str) -> None:
             env={**RESTIC_ENV, variable: value},
             binds=(f"{invalid}:/w",),
             prepare=PREPARE,
+            user="node",
         )
         expect_pass(suite, result, f"{label} is rejected", f"{label} was accepted")
         suite.same(f"{label} exits 2", "rc=2", result.body()[-1])
@@ -1295,6 +1299,64 @@ def check_process_supervision(image: str) -> None:
         print(result.stdout + result.stderr, file=sys.stderr)
         return
     suite.ok("C6 the process table refuses to start as root")
+
+    # Backup commands are equally identity-sensitive: a root read command
+    # creates mode-0600 logs that the node scheduler cannot maintain.
+    privilege_case = (
+        "rc=0; /restic.sh snapshots 2>/w/stderr || rc=$?\n"
+        "cat /w/stderr >&2\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n"
+        "test \"$rc\" -eq 2\n"
+        "grep -q 'must run as the unprivileged service user' /w/stderr\n"
+    )
+    result = case(
+        image,
+        privilege_case,
+        binds=(f"{workspace()}:/w",),
+        prepare=PREPARE,
+    )
+    expect_pass(suite, result, "C6 backup commands reject root", "C6 backup command accepted root")
+    suite.same("C6 root backup exits 2", "@ rc=2", probes(result)[0])
+
+    # The service path must still reach normal validation as node. An empty
+    # password stops the command after the identity check, so this proves the
+    # guard permits the scheduler user without needing a live Restic backend.
+    allowed_case = (
+        "rc=0; RESTIC_PASSWORD= /restic.sh snapshots 2>/w/stderr || rc=$?\n"
+        "cat /w/stderr >&2\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n"
+        "test \"$rc\" -eq 1\n"
+        "grep -q 'RESTIC_PASSWORD not set' /w/stderr\n"
+        "! grep -q 'must run as the unprivileged service user' /w/stderr\n"
+    )
+    result = run(image, allowed_case, workspace(), env={"RESTIC_PASSWORD": ""})
+    expect_pass(suite, result, "C6 backup commands allow the service user", "C6 backup command rejected node")
+    suite.same("C6 node backup reaches validation", "@ rc=1", probes(result)[0])
+
+    # Configuration tests source the script as root; library mode must remain
+    # available without weakening the executable product path.
+    library_case = (
+        "set -e; export RESTIC_LIB_ONLY=1; . /restic.sh; require_unprivileged\n"
+        "printf '@ rc=0\\n'\n"
+    )
+    result = case(image, library_case)
+    expect_pass(suite, result, "C6 library mode remains available", "C6 library mode was rejected")
+    suite.same("C6 library boundary exits 0", "@ rc=0", probes(result)[0])
+
+    with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
+        unguarded = mutate(
+            RESTIC,
+            ((('    if [ "${RESTIC_LIB_ONLY:-0}" != "1" ] && [ "$(id -u)" = "0" ]; then\n'), "    if false; then\n"),),
+            Path(tmp),
+        )
+        control = case(
+            image,
+            privilege_case,
+            binds=(f"{workspace()}:/w",),
+            prepare=PREPARE,
+            source=unguarded,
+        )
+        expect_red(suite, control, "C6 root-identity mutation turns red", "C6 root-identity guard is not live")
 
     # A zero or malformed delay must fail before any service starts.
     for delay in ("0", "0.0", "abc", "-1"):
