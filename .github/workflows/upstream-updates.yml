@@ -157,11 +157,9 @@ jobs:
         run: |
           set -euo pipefail
           # The pull request was written through `GITHUB_TOKEN`, so its
-          # `pull_request` workflow is held for human approval. Wait for that
-          # exact, expected run to exist in the approval-required state instead
-          # of approving it through an ambient user token. The same workflow is
-          # then dispatched on the same branch head; its later, successful
-          # check is the one branch protection can evaluate.
+          # `pull_request` workflow is held for approval. Identify the exact
+          # same-SHA run before changing anything; an unrelated or moved run
+          # must never be approved by this job.
           timeout 60 gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/pulls/${NUMBER}/files" \
             --jq '.[].filename' > "$RUNNER_TEMP/pr-files.txt"
@@ -184,27 +182,25 @@ jobs:
           }
           echo "pull_request validate run ${approval_run} is approval-required"
 
-          # Dispatch only after the approval-required check exists. Branch
-          # protection then sees this later same-SHA success rather than the
-          # synthetic PR event that a write token cannot approve.
-          timeout 60 gh workflow run validate.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
-          run_id=""
-          for _ in $(seq 1 30); do
-            run_id="$(timeout 60 gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/validate.yml/runs?per_page=30" \
-              --jq "[.workflow_runs[] | select(.head_sha == \"${SHA}\" and .event == \"workflow_dispatch\")] | first | .id // empty")"
-            [ -n "$run_id" ] && break
-            sleep 10
-          done
-          [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::the validate run never appeared" >&2; exit 1; }
+          # Approve only the run identified above, using this workflow's
+          # scoped `actions: write` token rather than an ambient user PAT.
+          # Approval starts the normal PR validator; it does not bypass it.
+          timeout 60 gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${approval_run}/approve" >/dev/null
+          echo "approved pull_request validate run ${approval_run}"
+
+          # Branch protection evaluates that approved run. It must finish
+          # successfully; a later dispatch cannot replace the held PR check.
           for _ in $(seq 1 120); do
-            status="$(timeout 30 gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)"
+            status="$(timeout 30 gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${approval_run}" --jq .status)"
             [ "$status" = completed ] && break
             sleep 30
           done
-          conclusion="$(timeout 30 gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .conclusion)"
+          conclusion="$(timeout 30 gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${approval_run}" --jq .conclusion)"
           [ "$conclusion" = success ] || {
-            echo "::error::validate finished ${conclusion} for ${SHA}" >&2
+            echo "::error::pull_request validate finished ${conclusion} for ${SHA}" >&2
             exit 1
           }
           merge_state=""
@@ -216,11 +212,11 @@ jobs:
             sleep 10
           done
           [ "$merge_state" = CLEAN ] || {
-            echo "::error::pull request #${NUMBER} is ${merge_state} after a green same-SHA validate" >&2
+            echo "::error::pull request #${NUMBER} is ${merge_state} after its approved validate passed" >&2
             exit 1
           }
-          echo "run=${run_id}" >> "$GITHUB_OUTPUT"
-          echo "validate ${conclusion} on ${SHA}; pull request #${NUMBER} is ${merge_state}"
+          echo "run=${approval_run}" >> "$GITHUB_OUTPUT"
+          echo "approved pull_request validate ${conclusion} on ${SHA}; pull request #${NUMBER} is ${merge_state}"
 
       - name: 🔀 Merge a validated upstream upgrade
         id: merge

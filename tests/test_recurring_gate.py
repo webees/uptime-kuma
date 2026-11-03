@@ -666,22 +666,37 @@ def assert_upstream_updates_are_bounded(case: unittest.TestCase, updates: str) -
     case.assertIn("timeout-minutes: ", updates)
     case.assertIn('[ "$(cat "$RUNNER_TEMP/changed.txt")" = "Dockerfile" ]', updates)
 
-    # Merge waits for the dispatched validate run on the same SHA.
-    case.assertIn("gh workflow run validate.yml", updates)
+    # Merge waits for the exact approval-required PR validator on the same
+    # SHA. The scoped token may approve that run, but may not replace it with a
+    # dispatch, bypass protection or use an ambient user PAT.
     case.assertIn(".conclusion == \\\"action_required\\\"", updates)
     case.assertIn("repos/${GITHUB_REPOSITORY}/pulls/${NUMBER}/files", updates)
     case.assertIn('[ "$(cat "$RUNNER_TEMP/pr-files.txt")" = "Dockerfile" ]', updates)
+    approve_call = (
+        'timeout 60 gh api --method POST \\\n'
+        '            "repos/${GITHUB_REPOSITORY}/actions/runs/${approval_run}/approve" >/dev/null'
+    )
+    case.assertIn(approve_call, updates)
+    validate_block = updates[
+        updates.index(approve_call):updates.index("- name: 🔀 Merge a validated upstream upgrade")
+    ]
+    case.assertIn('for _ in $(seq 1 120); do', validate_block)
+    case.assertIn('[ "$status" = completed ] && break', validate_block)
+    case.assertIn('[ "$conclusion" = success ] || {', validate_block)
     case.assertIn("--json mergeStateStatus --jq .mergeStateStatus", updates)
     case.assertIn('[ "$merge_state" = CLEAN ] || {', updates)
-    case.assertNotIn("gh run approve", updates)
+    case.assertNotIn("gh workflow run validate.yml", updates)
     case.assertNotIn("--admin", updates)
+    case.assertNotIn("secrets.GH_PAT", updates)
+    case.assertNotIn("secrets.PAT", updates)
+    case.assertNotIn("PERSONAL_ACCESS_TOKEN", updates)
     case.assertIn('--match-head-commit "$SHA"', updates)
     case.assertIn('if [ "$BUMP" = downgrade ] || [ "$BUMP" = prerelease ]; then', updates)
     case.assertIn("gh label create needs-review --force", updates)
     case.assertLess(
         updates.index('.conclusion == \\"action_required\\"'),
-        updates.index("gh workflow run validate.yml"),
-        "the later same-SHA dispatch must wait for the synthetic PR check",
+        updates.index(approve_call),
+        "approval must wait for the exact same-SHA held PR check",
     )
     case.assertLess(
         updates.index("--json mergeStateStatus --jq .mergeStateStatus"),
@@ -689,9 +704,9 @@ def assert_upstream_updates_are_bounded(case: unittest.TestCase, updates: str) -
         "branch protection must report clean before the merge",
     )
     case.assertLess(
-        updates.index("gh workflow run validate.yml"),
+        updates.index(approve_call),
         updates.index('--match-head-commit "$SHA"'),
-        "the merge must come after the validate dispatch",
+        "the merge must come after the approved validate has passed",
     )
 
     # A `GITHUB_TOKEN` merge does not trigger the push build, so it is
@@ -3788,7 +3803,7 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_upstream_updates_are_bounded(self, readonly)
 
-        # Tenth control: dispatch before the approval-required PR check exists,
+        # Tenth control: act before the approval-required PR check exists,
         # restoring the race where the blocked check is newer than the success.
         early_dispatch = updates.replace(
             '.conclusion == \\"action_required\\"',
@@ -3800,7 +3815,7 @@ class RecurringContractTest(unittest.TestCase):
             assert_upstream_updates_are_bounded(self, early_dispatch)
 
         # Eleventh control: merge without proving branch protection accepted
-        # the later same-SHA check leaves a green dispatch paired with BLOCKED.
+        # the approved same-SHA check, leaving a green run paired with BLOCKED.
         unchecked_merge = updates.replace(
             '[ "$merge_state" = CLEAN ] || {',
             '[ "$merge_state" = BLOCKED ] || {',
@@ -3809,6 +3824,70 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(unchecked_merge, updates)
         with self.assertRaises(AssertionError):
             assert_upstream_updates_are_bounded(self, unchecked_merge)
+
+        # Twelfth control: identify the held check but never approve it, which
+        # leaves the real required check pending forever.
+        unapproved = updates.replace(
+            'timeout 60 gh api --method POST \\\n'
+            '            "repos/${GITHUB_REPOSITORY}/actions/runs/${approval_run}/approve" >/dev/null',
+            'echo skipped',
+            1,
+        )
+        self.assertNotEqual(unapproved, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, unapproved)
+
+        # Thirteenth control: approve the updater run or an arbitrary run
+        # instead of the exact held pull_request run that was identified.
+        wrong_run = updates.replace(
+            'actions/runs/${approval_run}/approve',
+            'actions/runs/${GITHUB_RUN_ID}/approve',
+            1,
+        )
+        self.assertNotEqual(wrong_run, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, wrong_run)
+
+        # Fourteenth control: check the conclusion before the approved run has
+        # completed, so an `action_required` value looks like a finished gate.
+        unwaited = updates.replace(
+            '[ "$status" = completed ] && break',
+            '[ "$status" = queued ] && break',
+            1,
+        )
+        self.assertNotEqual(unwaited, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, unwaited)
+
+        # Fifteenth control: accept a non-success conclusion, which would let a
+        # failed validation reach the protected merge.
+        failed_validate = updates.replace(
+            '[ "$conclusion" = success ] || {',
+            '[ "$conclusion" = failure ] || {',
+            1,
+        )
+        self.assertNotEqual(failed_validate, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, failed_validate)
+
+        # Sixteenth control: reintroduce either an administrative merge bypass
+        # or a long-lived personal token to approve the held run.
+        admin_merge = updates.replace(
+            '--squash --delete-branch --match-head-commit "$SHA"',
+            '--admin --squash --delete-branch --match-head-commit "$SHA"',
+            1,
+        )
+        self.assertNotEqual(admin_merge, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, admin_merge)
+        pat_approval = updates.replace(
+            'GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+            'GH_TOKEN: ${{ secrets.PAT }}',
+            1,
+        )
+        self.assertNotEqual(pat_approval, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, pat_approval)
 
         # Sixth control: watch only the daily schedules and leave the weekly
         # publish uncovered, which is the one whose silence costs the most.
