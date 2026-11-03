@@ -440,6 +440,8 @@ def check_sqlite_consistency(image: str) -> None:
     result = run(
         image,
         "sqlite3 /w/data/kuma.db 'create table t(v); insert into t values(1);'\n"
+        "printf 'stale diagnostics\\n' > /w/data/error.log\n"
+        "printf 'keep this data\\n' > /w/data/keep.txt\n"
         "echo stale > /w/data/kuma.db-wal\n"
         "echo stale > /w/data/kuma.db-shm\n"
         "/restic.sh backup >/dev/null 2>&1 || exit 1\n"
@@ -450,6 +452,8 @@ def check_sqlite_consistency(image: str) -> None:
     suite.same("C3 snapshot has the copy", True, "/w/data/backup.bak" in result.output)
     for name in ("kuma.db", "kuma.db-wal", "kuma.db-shm"):
         suite.same(f"C3 live {name} excluded", False, f"/w/data/{name}\n" in result.output)
+    suite.same("C3 legacy error log excluded", False, "/w/data/error.log\n" in result.output)
+    suite.same("C3 ordinary data remains backed up", True, "/w/data/keep.txt\n" in result.output)
     suite.same("C3 copy is a usable database", "1", db_value(image, root, "select count(*) from t"))
 
     boundary = workspace()
@@ -484,24 +488,32 @@ def check_sqlite_consistency(image: str) -> None:
     tmp = workspace()
     mutated = mutate(
         RESTIC,
-        (('--exclude="$DB" --exclude="$DB-journal" --exclude="$DB-wal" --exclude="$DB-shm"', "--exclude=/nonexistent"),),
+        ((
+            '--exclude="$DB" --exclude="$DB-journal" --exclude="$DB-wal" '
+            '--exclude="$DB-shm" \\\n        --exclude="$DATA/error.log"',
+            "--exclude=/nonexistent",
+        ),),
         Path(tmp),
     )
     control_root = workspace()
     control = run(
         image,
         "sqlite3 /w/data/kuma.db 'create table t(v);'\n"
+        "printf 'stale diagnostics\\n' > /w/data/error.log\n"
         "/restic.sh backup >/dev/null 2>&1 || exit 1\n"
-        "if restic ls latest 2>&1 | grep -qx /w/data/kuma.db; then echo LIVE_IN_SNAPSHOT;"
-        " else echo LIVE_ABSENT; fi\n",
+        "ls=$(restic ls latest 2>&1)\n"
+        "if printf '%s\\n' \"$ls\" | grep -qx /w/data/kuma.db; then echo '@ live=LIVE_IN_SNAPSHOT';"
+        " else echo '@ live=LIVE_ABSENT'; fi\n"
+        "if printf '%s\\n' \"$ls\" | grep -qx /w/data/error.log; then echo '@ error_log=ERROR_LOG_IN_SNAPSHOT';"
+        " else echo '@ error_log=ERROR_LOG_ABSENT'; fi\n",
         control_root,
         source=mutated,
     )
     expect_pass(suite, control, "C3 mutation control still backs up", "C3 mutation control backup failed")
     suite.same(
-        "C3 mutation: live files return to the snapshot",
-        "LIVE_IN_SNAPSHOT",
-        control.body()[-1].strip(),
+        "C3 mutation: live database and legacy error log return to the snapshot",
+        ["@ live=LIVE_IN_SNAPSHOT", "@ error_log=ERROR_LOG_IN_SNAPSHOT"],
+        probes(control),
     )
 
 
