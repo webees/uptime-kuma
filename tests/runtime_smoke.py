@@ -174,6 +174,7 @@ def run(
     source: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> Case:
+    os.chmod(root, 0o777)
     return case(
         image,
         script,
@@ -181,6 +182,7 @@ def run(
         binds=(f"{root}:/w",),
         prepare=PREPARE,
         source=source,
+        user="node",
     )
 
 
@@ -727,6 +729,7 @@ def check_bounded_diagnostics(image: str) -> None:
         ("C5 negative directory cap", "RESTIC_LOG_DIR_MAX_BYTES", "-1"),
     ):
         invalid = workspace()
+        os.chmod(invalid, 0o777)
         result = case(
             image,
             "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
@@ -734,6 +737,7 @@ def check_bounded_diagnostics(image: str) -> None:
             env={**RESTIC_ENV, variable: value},
             binds=(f"{invalid}:/w",),
             prepare=PREPARE,
+            user="node",
         )
         expect_pass(suite, result, f"{label} is rejected", f"{label} was accepted")
         suite.same(f"{label} exits 2", "rc=2", result.body()[-1])
@@ -1295,6 +1299,39 @@ def check_process_supervision(image: str) -> None:
         print(result.stdout + result.stderr, file=sys.stderr)
         return
     suite.ok("C6 the process table refuses to start as root")
+
+    # Backup commands are equally identity-sensitive: a root read command
+    # creates mode-0600 logs that the node scheduler cannot maintain.
+    privilege_case = (
+        "rc=0; /restic.sh snapshots 2>/w/stderr || rc=$?\n"
+        "cat /w/stderr >&2\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n"
+        "test \"$rc\" -eq 2\n"
+        "grep -q 'must run as the unprivileged service user' /w/stderr\n"
+    )
+    result = case(
+        image,
+        privilege_case,
+        binds=(f"{workspace()}:/w",),
+        prepare=PREPARE,
+    )
+    expect_pass(suite, result, "C6 backup commands reject root", "C6 backup command accepted root")
+    suite.same("C6 root backup exits 2", "@ rc=2", probes(result)[0])
+
+    with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
+        unguarded = mutate(
+            RESTIC,
+            ((('    if [ "${RESTIC_LIB_ONLY:-0}" != "1" ] && [ "$(id -u)" = "0" ]; then\n'), "    if false; then\n"),),
+            Path(tmp),
+        )
+        control = case(
+            image,
+            privilege_case,
+            binds=(f"{workspace()}:/w",),
+            prepare=PREPARE,
+            source=unguarded,
+        )
+        expect_red(suite, control, "C6 root-identity mutation turns red", "C6 root-identity guard is not live")
 
     # A zero or malformed delay must fail before any service starts.
     for delay in ("0", "0.0", "abc", "-1"):

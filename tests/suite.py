@@ -11,6 +11,7 @@ retried.
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -102,6 +103,7 @@ def case(
     binds: tuple[str, ...] = (),
     prepare: str = "",
     source: Path | None = None,
+    user: str | None = None,
     attempts: int = 3,
 ) -> Case:
     """Run one isolated container case, retrying only an unmarked attempt.
@@ -116,14 +118,15 @@ def case(
     is a product-visible failure instead of a silently swallowed ``cp``.
     """
     source = source or SOURCE
-    body = (
+    staging = (
         "set -e\n"
         "cp -a /src/config/crontab /src/config/Caddyfile /src/scripts/restic.sh /src/scripts/services.sh /\n"
         "chmod +x /services.sh\n"
         "mkdir -p /entrypoint && cp -a /src/scripts/entrypoint/. /entrypoint/\n"
         "cp -a /src/scripts/entrypoint.sh /entrypoint.sh\n"
         "chmod +x /restic.sh /entrypoint.sh\n"
-    ) + "\n".join(
+    )
+    body = "\n".join(
         (
             f"printf '%s\\n' '{STARTED}'",
             "status=0",
@@ -138,6 +141,13 @@ def case(
             "",
         )
     )
+    if user is not None:
+        body = (
+            staging
+            + f"exec setpriv --reuid={user} --regid={user} --clear-groups bash -c {shlex.quote(body)}"
+        )
+    else:
+        body = staging + body
     env_args = [a for k, v in (env or {}).items() for a in ("--env", f"{k}={v}")]
     bind_args = [a for b in binds for a in ("-v", b)]
     last = Case(None, "")

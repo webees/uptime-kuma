@@ -6,15 +6,16 @@ invariant: a change that weakens one needs a failing regression test and an
 explicit replacement design first.
 
 Five classes are regressions: `C1` (host gate), `C2` (client IP), `C3` (SQLite
-hot copy), `C5` (bounded output), and `C9` (simplification). Three were never
+hot copy), `C5` (bounded output), and `C9` (simplification). Four were never
 established: `C4` (restore isolation), `C6` (lock/state/supervision), `C7`
-(input audit). `C8` was partial: a mooted pin, no validation, no ignore file.
+(input audit), and `C10` (backup invocation identity). `C8` was partial: a
+mooted pin, no validation, no ignore file.
 The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `f910817` on 2026-11-04,
-extending the previous baseline at `0d18d11`. Every later round must extend that
+Audit baseline: every commit reachable through `59bc94a` on 2026-11-04,
+extending the previous baseline at `f910817`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -220,6 +221,32 @@ timestamps, so a literal count measured its own clock as much as the guard.
 Regression gate: oversized output, a failing `tail`, an unmaintainable directory
 before work (backend never called), an unmaintainable directory after work, and
 a failing log write all fail closed inside their cap.
+
+## Backup Invocation Privilege
+
+History: never established before this round. `bf82d33` scheduled `/restic.sh`
+under the unprivileged service table while Fly SSH still defaulted to `root`;
+`75b410e` made an unmeasurable log directory fail closed. A manual read then
+created mode-0600 root-owned logs under `/var/log/restic`; the next scheduled
+backup could not measure them, failed closed during log maintenance, and
+created no snapshot. The operator command that looked harmless disabled the
+backup path.
+
+Final decision: every non-library `restic.sh` invocation requires an
+unprivileged user, and the documented Fly command uses `-u node`. Backup tests
+stage the image as root but execute the product path as `node`, matching the
+scheduler instead of hiding an identity mismatch.
+
+Authority: `scripts/restic.sh:require_unprivileged`; the service table in
+`scripts/services.sh` keeps the scheduled product path unprivileged.
+
+Mutation control: `tests/runtime_smoke.py:check_process_supervision` removes the
+identity guard and proves that the same root invocation no longer returns the
+authoritative exit 2.
+
+Regression gate: root execution is rejected with exit 2 and a specific
+remediation message; library sourcing remains available to configuration tests;
+actual backup, restore, freshness, and diagnostics cases run as `node`.
 
 ## State, Lock And Process Supervision
 

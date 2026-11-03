@@ -7,6 +7,18 @@
 
 set -uo pipefail
 
+# Fly SSH defaults to root. Running even a read-only command here creates a
+# root-owned log that the node-run scheduler cannot measure and therefore
+# refuses to back up. Keep the runtime identity one user across every path.
+require_unprivileged() {
+    if [ "${RESTIC_LIB_ONLY:-0}" != "1" ] && [ "$(id -u)" = "0" ]; then
+        echo "Error: restic.sh must run as the unprivileged service user; use flyctl ssh console -u node" >&2
+        exit 2
+    fi
+}
+
+require_unprivileged
+
 umask 077
 
 # ── Configuration ─────────────────────────────────────────────────────────────

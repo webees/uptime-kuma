@@ -172,13 +172,17 @@ fly apps restart               # Restart all instances
 ### Backup Operations (via SSH)
 
 ```bash
-/restic.sh backup              # Run manual backup
-/restic.sh snapshots           # List all snapshots
-/restic.sh check-freshness     # Fail if the last success is too old
-/restic.sh restore-test        # Drill the latest snapshot into /tmp
-RESTORE_CONFIRM=yes /restic.sh restore <id>   # Replace the live database
-/restic.sh test                # Test email notifications
+flyctl ssh console -u node -C '/restic.sh backup'              # Run manual backup
+flyctl ssh console -u node -C '/restic.sh snapshots'           # List all snapshots
+flyctl ssh console -u node -C '/restic.sh check-freshness'     # Fail if the last success is too old
+flyctl ssh console -u node -C '/restic.sh restore-test'        # Drill the latest snapshot into /tmp
+flyctl ssh console -u node -C 'RESTORE_CONFIRM=yes /restic.sh restore <id>'   # Replace the live database
+flyctl ssh console -u node -C '/restic.sh test'                # Test email notifications
 ```
+
+Fly SSH defaults to `root`, while the scheduler runs as `node`. Always pass
+`-u node`; `restic.sh` rejects root invocations so a manual read cannot create
+root-owned files that make every later scheduled backup fail.
 
 `supercronic` runs three jobs, each off minute zero so a deploy restart cannot
 cut one in half: `backup` at `:25` every hour, `check-freshness` at `:55` every
