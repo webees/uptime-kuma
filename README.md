@@ -310,7 +310,10 @@ smoke-tests, deploys and verifies the new digest.
 Its second job is one half of a watchdog pair. It checks `automation-health.yml`,
 `ghcr.yaml`, `deploy-drift.yml` and `ghcr-cleanup.yml`; `automation-health.yml`
 checks `upstream-updates.yml` in return. Each check fails when a workflow is
-disabled or has not succeeded within its cadence (weekly `192h`, daily `48h`).
+disabled or has not completed within its cadence (weekly `192h`, daily `48h`).
+A recent failed completion still proves the cron fired; that workflow's own
+failure and notifier remain the failure signal, so mutually watching workflows
+cannot deadlock waiting for each other's next success.
 GitHub disables a schedule after 60 idle days, and a cron that silently stops
 firing otherwise looks the same as "nothing to update". A workflow cannot see
 its own disabled state, so the mutual pair is deliberate; neither check claims

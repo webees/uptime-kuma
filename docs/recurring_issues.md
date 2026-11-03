@@ -14,8 +14,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `59bc94a` on 2026-11-04,
-extending the previous baseline at `f910817`. Every later round must extend that
+Audit baseline: every commit reachable through `d9f91b3` on 2026-11-04,
+extending the previous baseline at `59bc94a`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -463,6 +463,13 @@ file, reads the changed patch, and renews grace only for a commit that actually
 adds or removes `schedule` or `cron`. A recent documentation edit cannot mask a
 dead schedule. A missing recent schedule-changing commit and malformed commit
 or patch data both fail closed, regardless of the workflow metadata timestamp.
+The first implementation queried only successful scheduled runs. When both
+mutually watching workflows were red, neither could produce the success the
+other required; the recovery path itself deadlocked because no schedule line
+had changed. Final decision: liveness is the newest completed scheduled run,
+whatever its conclusion. The run's own failure and notifier remain the failure
+signal, while an overdue completion, disabled workflow, malformed conclusion,
+and absent recent schedule-changing anchor still fail closed.
 `.github/dependabot.yml` separately opens a grouped daily PR for immutable
 action pins. `dependabot-automerge.yml` executes only trusted base-branch code,
 validates every changed line through `scripts/validate_action_pin_update.py`,

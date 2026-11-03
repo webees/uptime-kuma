@@ -313,7 +313,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: 🕒 Every scheduled workflow still succeeds
+      - name: 🕒 Every scheduled workflow still runs and is current
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -334,4 +334,4 @@ jobs:
           branch: ${{ github.ref_name }}
           commit: ${{ github.sha }}
           conclusion: ${{ job.status }}
-          reason: A scheduled workflow is disabled, overdue, or failing.
+          reason: A scheduled workflow is disabled or overdue.
