@@ -242,7 +242,9 @@ Authority: `scripts/restic.sh:require_unprivileged`; the service table in
 
 Mutation control: `tests/runtime_smoke.py:check_process_supervision` removes the
 identity guard and proves that the same root invocation no longer returns the
-authoritative exit 2.
+authoritative exit 2. The same control proves the service-user path reaches
+normal validation as `node`, and that `RESTIC_LIB_ONLY=1` still permits the
+root-run configuration tests.
 
 Regression gate: root execution is rejected with exit 2 and a specific
 remediation message; library sourcing remains available to configuration tests;

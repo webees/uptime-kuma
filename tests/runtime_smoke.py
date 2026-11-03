@@ -1318,6 +1318,31 @@ def check_process_supervision(image: str) -> None:
     expect_pass(suite, result, "C6 backup commands reject root", "C6 backup command accepted root")
     suite.same("C6 root backup exits 2", "@ rc=2", probes(result)[0])
 
+    # The service path must still reach normal validation as node. An empty
+    # password stops the command after the identity check, so this proves the
+    # guard permits the scheduler user without needing a live Restic backend.
+    allowed_case = (
+        "rc=0; RESTIC_PASSWORD= /restic.sh snapshots 2>/w/stderr || rc=$?\n"
+        "cat /w/stderr >&2\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n"
+        "test \"$rc\" -eq 1\n"
+        "grep -q 'RESTIC_PASSWORD not set' /w/stderr\n"
+        "! grep -q 'must run as the unprivileged service user' /w/stderr\n"
+    )
+    result = run(image, allowed_case, workspace(), env={"RESTIC_PASSWORD": ""})
+    expect_pass(suite, result, "C6 backup commands allow the service user", "C6 backup command rejected node")
+    suite.same("C6 node backup reaches validation", "@ rc=1", probes(result)[0])
+
+    # Configuration tests source the script as root; library mode must remain
+    # available without weakening the executable product path.
+    library_case = (
+        "set -e; export RESTIC_LIB_ONLY=1; . /restic.sh; require_unprivileged\n"
+        "printf '@ rc=0\\n'\n"
+    )
+    result = case(image, library_case)
+    expect_pass(suite, result, "C6 library mode remains available", "C6 library mode was rejected")
+    suite.same("C6 library boundary exits 0", "@ rc=0", probes(result)[0])
+
     with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
         unguarded = mutate(
             RESTIC,
