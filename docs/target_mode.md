@@ -170,6 +170,15 @@ cell, a duplicate row, and a bare `未验证` with no reason. A `## Matrix` sect
 that exists is read from the GitHub API, not from a file the branch carries, so
 the table in the body is the table that was checked.
 
+Dependency bots cannot author that table, but they do not receive a general
+exemption. Before `Round matrix` may skip a bot author, `validate` requires a
+same-repository head. A Dependabot PR must pass
+`scripts/validate_action_pin_update.py` from the trusted base revision against
+the API diff; a
+`github-actions[bot]` PR must come from `deps/upstream` and change exactly
+`Dockerfile`. The image and runtime gates still run. Author, repository,
+branch, file and diff checks are independent mutation targets.
+
 ## Report order
 
 Conclusion, then matrix, then changes, then verification with run URLs and the

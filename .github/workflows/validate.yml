@@ -78,15 +78,66 @@ jobs:
           tar -xzf "$tmp/$archive" -C "$tmp" actionlint
           "$tmp/actionlint" -no-color
 
+      # Dependency bots cannot author a personal round matrix. Earn that
+      # exemption in this required check: Dependabot must contain only complete
+      # same-Action pin replacements, while the updater bot must come from this
+      # repository's deps/upstream branch and change only the pinned Dockerfile.
+      # The normal image/runtime gates still run after this scope check.
+      - name: 🧾 Automated dependency PR scope
+        if: >-
+          github.event_name == 'pull_request' &&
+          (github.event.pull_request.user.login == 'dependabot[bot]' ||
+           github.event.pull_request.user.login == 'github-actions[bot]')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          : "${PR:?a pull request number is required}"
+          : "${BASE:?a base commit is required}"
+          [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] || {
+            echo "::error::dependency bot PR must come from this repository" >&2
+            exit 1
+          }
+          if [ "$AUTHOR" = 'github-actions[bot]' ]; then
+            [ "$HEAD_REF" = deps/upstream ] || {
+              echo "::error::github-actions dependency PR must come from deps/upstream" >&2
+              exit 1
+            }
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" \
+              --jq '.[].filename' > "$RUNNER_TEMP/dependency-files.txt"
+            [ "$(cat "$RUNNER_TEMP/dependency-files.txt")" = Dockerfile ] || {
+              echo "::error::github-actions dependency PR may change only Dockerfile" >&2
+              cat "$RUNNER_TEMP/dependency-files.txt" >&2
+              exit 1
+            }
+            echo "upstream dependency PR changes only Dockerfile"
+          else
+            files="$(timeout 90 gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files?per_page=100")"
+            # Run the validator from the trusted base revision, not from the
+            # bot branch whose diff it is judging.
+            git show "${BASE}:scripts/validate_action_pin_update.py" \
+              > "$RUNNER_TEMP/validate_action_pin_update.py"
+            test -s "$RUNNER_TEMP/validate_action_pin_update.py"
+            printf '%s' "$files" | python3 "$RUNNER_TEMP/validate_action_pin_update.py"
+            echo "Dependabot PR contains only complete remote Action pin updates"
+          fi
+
       # Every path proves the image: ghcr.yaml reuses this workflow and must
-      # never publish a commit whose runtime gates did not run. Dependabot has
-      # no round matrix; its separate API-diff workflow accepts only complete
-      # same-Action pin replacements before requiring this validation gate.
-      # The matrix is a rejection criterion in docs/target_mode.md, so the body
-      # is checked instead of reviewed by eye. Only a PR has a body; the push
-      # and `workflow_call` copies legitimately carry none.
+      # never publish a commit whose runtime gates did not run. The matrix is a
+      # rejection criterion in docs/target_mode.md, so a human PR body is
+      # checked instead of reviewed by eye. Only a PR has a body; the push and
+      # `workflow_call` copies legitimately carry none.
       - name: 🧾 Round matrix
-        if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          github.event.pull_request.user.login != 'github-actions[bot]'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}

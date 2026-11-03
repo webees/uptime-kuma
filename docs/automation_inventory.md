@@ -1,6 +1,6 @@
 # Automation Inventory
 
-Audit baseline: `691071e` on 2026-11-02. This inventory answers whether the
+Audit baseline: `0d18d11` on 2026-11-04. This inventory answers whether the
 workflows and scripts are reachable, what each protects, and whether any can be
 removed. A script is a deletion candidate only after proving it has no caller,
 no runtime or release dependency, and no rollback value.
@@ -9,7 +9,7 @@ no runtime or release dependency, and no rollback value.
 
 | File | Triggers | Responsibility | Production effect | Decision |
 | :--- | :--- | :--- | :--- | :--- |
-| `validate.yml` | push to `main`, pull request, manual, reusable call | shell/Python checks, actionlint, round matrix, image smoke and Caddy validation | required merge gate; `ghcr.yaml` calls it before publishing | retain; a required status context |
+| `validate.yml` | push to `main`, pull request, manual, reusable call | shell/Python checks, actionlint, bot PR scope proof, round matrix, image smoke and Caddy validation | required merge gate; `ghcr.yaml` calls it before publishing | retain; a required status context |
 | `ghcr.yaml` | push to `main` or tags, weekly schedule, manual | validate, multi-arch build, digest smoke, SBOM, Trivy gates, exact-digest deploy, Fly verification, `latest` promotion | sole trusted publish and production deploy path | retain; cannot be merged into a local helper |
 | `deploy-drift.yml` | after each `ghcr.yaml` run, daily schedule, manual | compares every running machine's image and health with the newest completed release and the promoted `latest` amd64 child; probes `/health`, `/` and `/dashboard` publicly | detects hand deploys, unhealthy machines, a dead backend behind Caddy and incomplete promotions after the fact | retain; independent observer of the publish path |
 | `upstream-updates.yml` | daily schedule, manual | resolves Uptime Kuma/supercronic and direct Node.js pins, opens or refreshes `deps/upstream`, approves only the exact held same-SHA PR validator, waits for success, requires branch protection `CLEAN`, merges stable updates and dispatches publish | keeps the upstream image, scheduler and direct runtime dependencies current | retain; separate from runtime scripts because it needs write/merge permissions |
@@ -35,7 +35,7 @@ workflows have distinct event and permission boundaries.
 | `upstream_deps.py` | `upstream-updates.yml` | resolves, compares and rewrites the five image/tool pins plus the explicit Node.js and tar override pins | retain; bounded dependency update boundary |
 | `check_schedules.py` | both watchdog workflows | detects disabled or overdue scheduled workflows through GitHub metadata | retain; watchdog evidence |
 | `check_automation_credentials.py` | `automation-health.yml` | fail-closed token lifetime and HTTPS webhook preflight without secret output | retain; deploy prerequisite |
-| `validate_action_pin_update.py` | `dependabot-automerge.yml` | API-diff parser that accepts only complete same-Action pin replacements | retain; auto-merge security boundary |
+| `validate_action_pin_update.py` | `validate.yml`, `dependabot-automerge.yml` | API-diff parser that accepts only complete same-Action pin replacements | retain; required-check and auto-merge security boundary |
 | `pr_matrix.py` | `validate.yml` | parses the required nine-class PR evidence matrix and touched-file coverage | retain; merge gate |
 | `round_open.py` | `validate.yml`, maintainers | prints the round skeleton and enforces audit-baseline ancestry | retain; merge gate and evidence generator |
 | `branch_rule.py` | maintainers, tests | compares the live `main` protection rule with the recorded rule | retain; external-rule drift check |
@@ -49,8 +49,8 @@ first moving the corresponding tests and rollback evidence.
 
 | Dependency lane | Cadence | Current control | Remaining gap |
 | :--- | :--- | :--- | :--- |
-| GitHub Actions pins | daily | Dependabot grouped pull request, then `dependabot-automerge.yml` after `validate` | none observed |
-| Uptime Kuma image, supercronic and direct Node.js packages | daily | `upstream-updates.yml` plus `upstream_deps.py`; tar overrides follow the direct `tar` pin; npm pins ahead of the registry's `latest` are retained | stable release merge requires the approved same-SHA `validate` to pass and branch protection `CLEAN`; no PAT or admin bypass; major npm updates use the same full image/runtime gate |
+| GitHub Actions pins | daily | Dependabot grouped pull request; `validate` independently rechecks the API diff, then `dependabot-automerge.yml` waits for that required check and merges | none observed |
+| Uptime Kuma image, supercronic and direct Node.js packages | daily | `upstream-updates.yml` plus `upstream_deps.py`; `validate` proves the same-repository `deps/upstream` head changes only `Dockerfile`; tar overrides follow the direct `tar` pin; npm pins ahead of the registry's `latest` are retained | stable release merge requires the approved same-SHA `validate` to pass and branch protection `CLEAN`; no PAT or admin bypass; major npm updates use the same full image/runtime gate |
 | Base OS packages | weekly | `rebuild.sh` probe followed by build, scan, deploy and verify | unfixed Debian advisories remain report-only by design |
 | Direct Node runtime packages and tar overrides | daily | `upstream-updates.yml` resolves the explicit package list, keeps all four tar overrides equal to the direct `tar` pin, and refuses missing or unexpected values | no separate lane required; image tests still cover the installed tree |
 
