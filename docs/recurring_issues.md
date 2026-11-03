@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `0d18d11` on 2026-11-04,
-extending the previous baseline at `5d60fd8`. Every later round must extend that
+Audit baseline: every commit reachable through `f910817` on 2026-11-04,
+extending the previous baseline at `0d18d11`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -146,17 +146,20 @@ Final decision: the backup takes a `.backup` snapshot, proves the copy with a
 single `ok` from `integrity_check`, and only then runs the backend. The live
 database and its `-journal`/`-wal`/`-shm` sidecars are excluded. Any failure
 aborts before the backend and records no success time; the temporary copy is
-removed on success and on failure.
+removed on success and on failure. The legacy top-level `/app/data/error.log`
+is excluded as stale diagnostics rather than application state; ordinary data
+files under `/app/data` remain in the snapshot.
 
 Authority: `scripts/restic.sh:sqlite_snapshot` and
 `scripts/restic.sh:sqlite_check`.
 
 Mutation control: `tests/runtime_smoke.py:check_sqlite_consistency` (live files
-backed up directly).
+and the legacy error log backed up directly).
 
 Regression gate: a healthy database yields an `ok` check, a corrupted one aborts
-without calling the backend, the snapshot contains no live file, and the
-temporary copy never survives either outcome.
+without calling the backend, the snapshot contains no live file or legacy
+`error.log`, an ordinary data file remains present, and the temporary copy never
+survives either outcome.
 
 ## Restore Isolation And Confirmation
 

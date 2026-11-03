@@ -330,6 +330,7 @@ backup() {
     sqlite_snapshot || exit 2
     must "Data backup" "$LONG_TIMEOUT" restic backup --verbose \
         --exclude="$DB" --exclude="$DB-journal" --exclude="$DB-wal" --exclude="$DB-shm" \
+        --exclude="$DATA/error.log" \
         "$DATA"
     must "Health check" "$LONG_TIMEOUT" restic check
     must "Snapshot prune" "$LONG_TIMEOUT" restic forget \

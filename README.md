@@ -192,6 +192,11 @@ verifies it, copies the current database to `kuma.db.previous`, swaps, then
 requires an application restart. Keep that rollback copy until the instance is
 confirmed healthy.
 
+Snapshots exclude the live SQLite files and the legacy top-level
+`/app/data/error.log`, which is stale diagnostics rather than application
+state. Other data files under `/app/data` remain backed up; current container
+output is available through `fly logs`.
+
 `restore-test` also starts an isolated Uptime Kuma against a copy of the
 restored database and requires `/` to return `302`. Monitors are deactivated in
 that copy before launch, and the process is stopped before the drill returns,
