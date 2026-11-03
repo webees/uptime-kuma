@@ -29,6 +29,27 @@ def load_module():
 upstream = load_module()
 
 
+def next_major(version: str) -> str:
+    major, _, _ = version.split(".")
+    return f"{int(major) + 1}.0.0"
+
+
+def next_patch(version: str) -> str:
+    major, minor, patch = version.split(".")
+    return f"{major}.{minor}.{int(patch) + 1}"
+
+
+def previous_patch(version: str) -> str:
+    major, minor, patch = (int(part) for part in version.split("."))
+    if patch:
+        return f"{major}.{minor}.{patch - 1}"
+    if minor:
+        return f"{major}.{minor - 1}.0"
+    if major:
+        return f"{major - 1}.0.0"
+    raise ValueError(f"no version precedes {version}")
+
+
 class NpmPinTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -52,8 +73,8 @@ class NpmPinTest(unittest.TestCase):
     def test_compare_marks_direct_and_override_updates(self) -> None:
         want = upstream.current()
         npm_want = upstream.current_npm()[0]
-        npm_want["axios"] = "1.0.0"
-        npm_want["tar"] = "7.5.23"
+        npm_want["axios"] = next_major(npm_want["axios"])
+        npm_want["tar"] = next_patch(npm_want["tar"])
         output = Path(self.temp.name) / "github-output"
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -74,7 +95,7 @@ class NpmPinTest(unittest.TestCase):
 
     def test_compare_and_apply_do_not_downgrade_an_ahead_pin(self) -> None:
         npm_want = upstream.current_npm()[0]
-        npm_want["tar"] = "7.5.21"
+        npm_want["tar"] = previous_patch(npm_want["tar"])
         output = Path(self.temp.name) / "github-output"
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -82,35 +103,43 @@ class NpmPinTest(unittest.TestCase):
         emitted = output.read_text(encoding="utf-8")
         self.assertIn("changed=false", emitted)
         self.assertIn("bump=patch", emitted)
-        self.assertIn("ahead of latest 7.5.21", stdout.getvalue())
+        self.assertIn(f"ahead of latest {npm_want['tar']}", stdout.getvalue())
         with self.assertRaises(upstream.Refused):
             upstream.apply(upstream.current(), npm_want, None)
 
     def test_apply_rewrites_only_known_npm_pins(self) -> None:
         npm_want = upstream.current_npm()[0]
-        npm_want["axios"] = "1.0.0"
-        npm_want["tar"] = "7.5.23"
+        old_axios = npm_want["axios"]
+        old_tar = npm_want["tar"]
+        npm_want["axios"] = next_major(old_axios)
+        npm_want["tar"] = next_patch(old_tar)
         output = Path(self.temp.name) / "github-output"
         with contextlib.redirect_stdout(io.StringIO()):
             upstream.apply(upstream.current(), npm_want, output)
         text = self.dockerfile.read_text(encoding="utf-8")
-        self.assertIn("        axios@1.0.0 \\", text)
+        self.assertIn(f"        axios@{npm_want['axios']} \\", text)
         for package in upstream.TAR_OVERRIDE_PACKAGES:
-            self.assertIn(f'        "overrides.{package}.tar=7.5.23" \\', text)
-        self.assertNotIn("        axios@0.34.0 \\", text)
-        self.assertNotIn('"overrides.@louislam/sqlite3.tar=7.5.22"', text)
-        self.assertIn("ARG UPTIME_KUMA_VERSION=2.5.9", text)
+            self.assertIn(f'        "overrides.{package}.tar={npm_want["tar"]}" \\', text)
+        self.assertNotIn(f"        axios@{old_axios} \\", text)
+        self.assertNotIn(f'"overrides.@louislam/sqlite3.tar={old_tar}"', text)
+        self.assertIn(f"ARG UPTIME_KUMA_VERSION={upstream.current()['uptime_version']}", text)
         self.assertIn("HEALTHCHECK --interval=60s", text)
 
     def test_divergent_override_fails_closed(self) -> None:
+        direct = upstream.current_npm()[0]
         text = self.dockerfile.read_text(encoding="utf-8")
-        text = text.replace('"overrides.cacache.tar=7.5.22"', '"overrides.cacache.tar=7.5.21"', 1)
+        text = text.replace(
+            f'"overrides.cacache.tar={direct["tar"]}"',
+            f'"overrides.cacache.tar={next_patch(direct["tar"])}"',
+            1,
+        )
         with self.assertRaises(upstream.Refused):
             upstream.current_npm(text)
 
     def test_apply_refuses_a_missing_package_anchor(self) -> None:
+        ws_version = upstream.current_npm()[0]["ws"]
         text = self.dockerfile.read_text(encoding="utf-8")
-        text = text.replace("        ws@8.22.1 \\", "        ws@8.22.1", 1)
+        text = text.replace(f"        ws@{ws_version} \\", f"        ws@{ws_version}", 1)
         self.dockerfile.write_text(text, encoding="utf-8")
         with self.assertRaises(upstream.Refused):
             upstream.apply(upstream.current(), upstream.current_npm()[0], None)
