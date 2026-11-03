@@ -94,13 +94,13 @@ RUN cd /app \
         @azure/identity@4.14.1 \
         @azure/msal-node@7.1.2 \
         @grpc/grpc-js@1.14.7 \
-        axios@0.34.0 \
-        body-parser@1.20.9 \
+        axios@1.21.0 \
+        body-parser@2.4.0 \
         follow-redirects@1.16.2 \
         liquidjs@10.30.1 \
         mysql2@3.24.6 \
         nodemailer@10.3.1 \
-        protobufjs@8.8.0 \
+        protobufjs@8.8.1 \
         redbean-node@0.4.0 \
         tar@7.5.22 \
         ws@8.22.1 \
