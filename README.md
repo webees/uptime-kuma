@@ -272,7 +272,7 @@ Six workflows run without a human, and Dependabot updates the action pins:
 
 | Workflow | When | What it does |
 | :--- | :--- | :--- |
-| `upstream-updates.yml` | daily `02:23` UTC | resolves the newest stable Uptime Kuma release, its image digest, the supercronic binaries and the explicit Node.js runtime packages, rewrites only the known `Dockerfile` pins, opens `deps/upstream`, validates the exact branch head after the synthetic PR check is held, then merges and dispatches the publish chain |
+| `upstream-updates.yml` | daily `02:23` UTC | resolves the newest stable Uptime Kuma release, its image digest, the supercronic binaries and the explicit Node.js runtime packages, rewrites only the known `Dockerfile` pins, opens `deps/upstream`, approves only the exact held same-SHA PR validator, waits for it to pass, then requires a clean branch and dispatches the publish chain |
 | `dependabot-automerge.yml` | when Dependabot opens or refreshes a PR | accepts only same-Action SHA/comment replacements, waits for the required `validate` check, then merges the action update directly |
 | `ghcr.yaml` | weekly `Mon 03:17` UTC, plus every push | probes the published image for pending OS packages, builds only when there is something to ship, smoke-tests and scans the digest, records its SBOM, deploys it to Fly, verifies the release and only then moves `latest` |
 | `deploy-drift.yml` | after every publish, daily `05:41` UTC | fails when production is not running the digest `latest` was promoted from |
@@ -284,11 +284,13 @@ read from GitHub releases and Docker Hub, while direct Node.js versions come
 from the public npm registry and the four installer-only `tar` overrides stay
 equal to the direct `tar` pin. An npm pin that is already ahead of the
 registry's `latest` is retained rather than rolled back. A PR opened or updated
-with `GITHUB_TOKEN` creates an approval-required `pull_request` check, so the
-workflow first proves that exact synthetic check exists, then dispatches
-`validate` on the same branch head. It refuses to merge unless branch protection
-reports `CLEAN` for that later same-SHA run; it never approves or bypasses the
-synthetic check. A stable update therefore merges on its own once `validate`
+with `GITHUB_TOKEN` creates an approval-required `pull_request` check. The
+workflow first proves that the PR changes only `Dockerfile`, identifies the
+exact held validator for the pushed SHA, and approves only that run through
+its scoped `actions: write` permission. It then waits for that validator to
+succeed and refuses to merge unless branch protection reports `CLEAN`; a PAT,
+`--admin`, a replacement dispatch or a synthetic success is never accepted. A
+stable update therefore merges on its own once the real `validate` check
 passes on the branch head, matching the Vaultwarden delivery model. A
 **downgrade** or unexpected **prerelease** stays open with the `needs-review`
 label; a major npm update still has to pass the same full image/runtime gate

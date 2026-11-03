@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `18db182` on 2026-11-04,
-extending the previous baseline at `0873c81`. Every later round must extend that
+Audit baseline: every commit reachable through `5d60fd8` on 2026-11-04,
+extending the previous baseline at `18db182`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -399,14 +399,18 @@ the supercronic release, both architecture checksums, and the explicit direct
 Node.js runtime packages could stay stale even while every workflow was green.
 Final decision: `upstream-updates.yml` resolves those values daily through the
 bounded, tested `scripts/upstream_deps.py`, rewrites only `Dockerfile`, pushes
-`deps/upstream`, dispatches `validate` on that exact SHA, and merges a stable
-upgrade after the run succeeds, matching the Vaultwarden delivery model. The
+`deps/upstream`, waits for the held `validate` run on that exact SHA, and
+merges a stable upgrade after approving and passing that run, matching the
+Vaultwarden delivery model. The
 PR is created with `GITHUB_TOKEN`, which leaves its synthetic `pull_request`
-check approval-required; approving that check with an ambient PAT would be a
-new credential dependency. The workflow instead waits for the expected held
-check, dispatches the same validator afterwards on the same head SHA, and
-requires branch protection to report `CLEAN` before merging. A missing held
-check, a non-clean merge state, or a moved head fails closed. The
+check approval-required. The workflow first verifies that the PR changes only
+`Dockerfile`, identifies the expected held check for the exact pushed SHA, and
+approves only that run through its scoped `actions: write` permission. It then
+waits for the real validator to succeed and requires branch protection to
+report `CLEAN` before merging. No PAT, replacement dispatch, `--admin` merge or
+synthetic success is accepted. The approved run must complete successfully; a
+missing held check, a failed validator, a non-clean merge state, or a moved head
+fails closed. The
 resolver keeps the four installer-only `tar` overrides equal to the direct
 `tar` pin. An npm pin already ahead of the registry's `latest` is retained
 instead of being rolled back. A prerelease or downgrade stays open with
