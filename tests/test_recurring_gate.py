@@ -668,9 +668,26 @@ def assert_upstream_updates_are_bounded(case: unittest.TestCase, updates: str) -
 
     # Merge waits for the dispatched validate run on the same SHA.
     case.assertIn("gh workflow run validate.yml", updates)
+    case.assertIn(".conclusion == \\\"action_required\\\"", updates)
+    case.assertIn("repos/${GITHUB_REPOSITORY}/pulls/${NUMBER}/files", updates)
+    case.assertIn('[ "$(cat "$RUNNER_TEMP/pr-files.txt")" = "Dockerfile" ]', updates)
+    case.assertIn("--json mergeStateStatus --jq .mergeStateStatus", updates)
+    case.assertIn('[ "$merge_state" = CLEAN ] || {', updates)
+    case.assertNotIn("gh run approve", updates)
+    case.assertNotIn("--admin", updates)
     case.assertIn('--match-head-commit "$SHA"', updates)
     case.assertIn('if [ "$BUMP" = downgrade ] || [ "$BUMP" = prerelease ]; then', updates)
     case.assertIn("gh label create needs-review --force", updates)
+    case.assertLess(
+        updates.index('.conclusion == \\"action_required\\"'),
+        updates.index("gh workflow run validate.yml"),
+        "the later same-SHA dispatch must wait for the synthetic PR check",
+    )
+    case.assertLess(
+        updates.index("--json mergeStateStatus --jq .mergeStateStatus"),
+        updates.index('--match-head-commit "$SHA"'),
+        "branch protection must report clean before the merge",
+    )
     case.assertLess(
         updates.index("gh workflow run validate.yml"),
         updates.index('--match-head-commit "$SHA"'),
@@ -3770,6 +3787,28 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(readonly, updates)
         with self.assertRaises(AssertionError):
             assert_upstream_updates_are_bounded(self, readonly)
+
+        # Tenth control: dispatch before the approval-required PR check exists,
+        # restoring the race where the blocked check is newer than the success.
+        early_dispatch = updates.replace(
+            '.conclusion == \\"action_required\\"',
+            '.conclusion == \\"success\\"',
+            1,
+        )
+        self.assertNotEqual(early_dispatch, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, early_dispatch)
+
+        # Eleventh control: merge without proving branch protection accepted
+        # the later same-SHA check leaves a green dispatch paired with BLOCKED.
+        unchecked_merge = updates.replace(
+            '[ "$merge_state" = CLEAN ] || {',
+            '[ "$merge_state" = BLOCKED ] || {',
+            1,
+        )
+        self.assertNotEqual(unchecked_merge, updates)
+        with self.assertRaises(AssertionError):
+            assert_upstream_updates_are_bounded(self, unchecked_merge)
 
         # Sixth control: watch only the daily schedules and leave the weekly
         # publish uncovered, which is the one whose silence costs the most.

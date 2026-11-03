@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `0873c81` on 2026-11-03,
-extending the previous baseline at `6e9c704`. Every later round must extend that
+Audit baseline: every commit reachable through `18db182` on 2026-11-04,
+extending the previous baseline at `0873c81`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -401,6 +401,12 @@ Final decision: `upstream-updates.yml` resolves those values daily through the
 bounded, tested `scripts/upstream_deps.py`, rewrites only `Dockerfile`, pushes
 `deps/upstream`, dispatches `validate` on that exact SHA, and merges a stable
 upgrade after the run succeeds, matching the Vaultwarden delivery model. The
+PR is created with `GITHUB_TOKEN`, which leaves its synthetic `pull_request`
+check approval-required; approving that check with an ambient PAT would be a
+new credential dependency. The workflow instead waits for the expected held
+check, dispatches the same validator afterwards on the same head SHA, and
+requires branch protection to report `CLEAN` before merging. A missing held
+check, a non-clean merge state, or a moved head fails closed. The
 resolver keeps the four installer-only `tar` overrides equal to the direct
 `tar` pin. An npm pin already ahead of the registry's `latest` is retained
 instead of being rolled back. A prerelease or downgrade stays open with
