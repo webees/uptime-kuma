@@ -4167,7 +4167,14 @@ class RecurringContractTest(unittest.TestCase):
         try:
             def healthy(url: str) -> dict:
                 if "/runs?" in url:
-                    return {"workflow_runs": [{"created_at": "2026-11-01T11:00:00Z"}]}
+                    return {
+                        "workflow_runs": [
+                            {
+                                "created_at": "2026-11-01T11:00:00Z",
+                                "conclusion": "success",
+                            }
+                        ]
+                    }
                 return {"state": "active", "created_at": "2026-10-01T00:00:00Z"}
 
             module.fetch_json = healthy
@@ -4182,7 +4189,14 @@ class RecurringContractTest(unittest.TestCase):
 
             def stale(url: str) -> dict:
                 if "/runs?" in url:
-                    return {"workflow_runs": [{"created_at": "2026-10-20T00:00:00Z"}]}
+                    return {
+                        "workflow_runs": [
+                            {
+                                "created_at": "2026-10-20T00:00:00Z",
+                                "conclusion": "success",
+                            }
+                        ]
+                    }
                 return {"state": "active", "created_at": "2026-10-01T00:00:00Z"}
 
             module.fetch_json = stale
@@ -4262,7 +4276,14 @@ class RecurringContractTest(unittest.TestCase):
 
             def future(url: str) -> dict:
                 if "/runs?" in url:
-                    return {"workflow_runs": [{"created_at": "2026-11-02T00:00:00Z"}]}
+                    return {
+                        "workflow_runs": [
+                            {
+                                "created_at": "2026-11-02T00:00:00Z",
+                                "conclusion": "success",
+                            }
+                        ]
+                    }
                 return {"state": "active", "created_at": "2026-10-01T00:00:00Z"}
 
             module.fetch_json = future
@@ -4276,6 +4297,89 @@ class RecurringContractTest(unittest.TestCase):
                          ("upstream-updates.yml", 48))
         with self.assertRaises(module.argparse.ArgumentTypeError):
             module.parse_spec("../escape.yml=48")
+
+    def test_schedule_checker_separates_liveness_from_success(self) -> None:
+        """A recent failed attempt proves the schedule fired without hiding failure."""
+        path = ROOT / "scripts/check_schedules.py"
+        spec = importlib.util.spec_from_file_location("check_schedules_liveness", path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        now = module.datetime(2026, 11, 1, 12, tzinfo=module.timezone.utc)
+        metadata = {"state": "active"}
+
+        def recent_failure(url: str) -> dict:
+            if "event=schedule" in url and "status=completed" in url:
+                return {
+                    "workflow_runs": [
+                        {
+                            "created_at": "2026-11-01T11:30:00Z",
+                            "conclusion": "failure",
+                        }
+                    ]
+                }
+            if "/commits?" in url:
+                raise AssertionError("a recent completion must not use schedule grace")
+            return metadata
+
+        original = module.fetch_json
+        original_completion = module.latest_scheduled_completion
+        try:
+            module.fetch_json = recent_failure
+            module.check_workflow(
+                "owner/repo", "automation-health.yml", 48, now, "https://api.example"
+            )
+
+            # Boundary: the same failed conclusion is not proof of liveness once
+            # the cadence has elapsed.
+            def stale_failure(url: str) -> dict:
+                if "event=schedule" in url and "status=completed" in url:
+                    return {
+                        "workflow_runs": [
+                            {
+                                "created_at": "2026-10-30T00:00:00Z",
+                                "conclusion": "failure",
+                            }
+                        ]
+                    }
+                return metadata
+
+            module.fetch_json = stale_failure
+            with self.assertRaisesRegex(module.Refused, "has not completed on schedule in 60h"):
+                module.check_workflow(
+                    "owner/repo", "automation-health.yml", 48, now, "https://api.example"
+                )
+
+            # Negative: a malformed completion cannot become liveness evidence.
+            def malformed_completion(url: str) -> dict:
+                if "event=schedule" in url and "status=completed" in url:
+                    return {"workflow_runs": [{"created_at": "2026-11-01T11:30:00Z"}]}
+                return metadata
+
+            module.fetch_json = malformed_completion
+            with self.assertRaisesRegex(module.Refused, "conclusion"):
+                module.check_workflow(
+                    "owner/repo", "automation-health.yml", 48, now, "https://api.example"
+                )
+
+            # Mutation control: dropping the completion evidence recreates the
+            # mutual-watchdog deadlock and must be refused, not treated as green.
+            def no_schedule_change(url: str) -> dict:
+                if "/commits?" in url:
+                    return []
+                return metadata
+
+            module.fetch_json = no_schedule_change
+            module.latest_scheduled_completion = lambda base, workflow: None
+            with self.assertRaisesRegex(module.Refused, "no schedule-changing commit"):
+                module.check_workflow(
+                    "owner/repo", "automation-health.yml", 48, now, "https://api.example"
+                )
+        finally:
+            module.fetch_json = original
+            module.latest_scheduled_completion = original_completion
 
     def test_one_process_model(self) -> None:
         """The supervisor replaced Overmind; a second model cannot linger."""

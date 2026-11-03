@@ -8,10 +8,14 @@ so "nothing to update" cannot hide a dead schedule.
     check_schedules.py --workflow ghcr.yaml=192 --workflow deploy-drift.yml=48
 
 The repository and token come from `GITHUB_REPOSITORY` and `GITHUB_TOKEN`.
-When a workflow has never completed on schedule, its grace period starts at
-the commit that last changed the `schedule` or `cron` lines, not at GitHub's
-coarse workflow `updated_at` timestamp. No recent schedule-changing commit is
-itself a failure. Unreadable or malformed API data also fails closed.
+Any completed scheduled run proves the trigger still fires; its conclusion is
+reported by that workflow and does not create a second liveness failure here.
+This distinction prevents two failing watchdogs from waiting for each other's
+next success forever. When a workflow has never completed on schedule, its
+grace period starts at the commit that last changed the `schedule` or `cron`
+lines, not at GitHub's coarse workflow `updated_at` timestamp. No recent
+schedule-changing commit is itself a failure. Unreadable or malformed API data
+also fails closed.
 """
 
 from __future__ import annotations
@@ -32,6 +36,16 @@ REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 WORKFLOW = re.compile(r"^[A-Za-z0-9_.-]+\.ya?ml$")
 FUTURE_SKEW_SECONDS = 300
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+CONCLUSIONS = {
+    "action_required",
+    "cancelled",
+    "failure",
+    "neutral",
+    "skipped",
+    "stale",
+    "success",
+    "timed_out",
+}
 
 
 class Refused(Exception):
@@ -137,6 +151,24 @@ def recent_schedule_change(
     return None
 
 
+def latest_scheduled_completion(base: str, workflow: str) -> tuple[datetime, str] | None:
+    """Return the newest terminal scheduled run, regardless of its conclusion."""
+    runs = fetch_json(f"{base}/runs?event=schedule&status=completed&per_page=1")
+    if not isinstance(runs, dict):
+        raise Refused(f"{workflow}: scheduled runs response is not an object")
+    records = runs.get("workflow_runs")
+    if not isinstance(records, list):
+        raise Refused(f"{workflow}: scheduled runs response has no workflow_runs array")
+    if not records:
+        return None
+    if not isinstance(records[0], dict):
+        raise Refused(f"{workflow}: scheduled run is not an object")
+    concluded = records[0].get("conclusion")
+    if concluded not in CONCLUSIONS:
+        raise Refused(f"{workflow}: scheduled completion has no valid conclusion")
+    return timestamp(records[0].get("created_at"), f"{workflow} last completion"), concluded
+
+
 def check_workflow(
     repository: str,
     workflow: str,
@@ -153,15 +185,9 @@ def check_workflow(
     if state != "active":
         raise Refused(f"{workflow} is {state or 'in an unknown state'}, not active")
 
-    runs = fetch_json(f"{base}/runs?event=schedule&status=success&per_page=1")
-    records = runs.get("workflow_runs")
-    if not isinstance(records, list):
-        raise Refused(f"{workflow}: scheduled runs response has no workflow_runs array")
-    observed_success = bool(records)
-    if records:
-        if not isinstance(records[0], dict):
-            raise Refused(f"{workflow}: scheduled run is not an object")
-        last = timestamp(records[0].get("created_at"), f"{workflow} last success")
+    completion = latest_scheduled_completion(base, workflow)
+    if completion is not None:
+        last, conclusion = completion
     else:
         # GitHub's workflow metadata can be stale across file edits. The commit
         # that actually changed the cron is the precise onboarding boundary;
@@ -175,12 +201,17 @@ def check_workflow(
 
     delta = (now - last).total_seconds()
     if delta < -FUTURE_SKEW_SECONDS:
-        raise Refused(f"{workflow}: last success is in the future ({last.isoformat()})")
+        raise Refused(f"{workflow}: last completion is in the future ({last.isoformat()})")
     age_hours = max(0, int(delta // 3600))
-    label = "last scheduled success" if observed_success else "schedule grace anchor"
-    print(f"{workflow}: {label} {age_hours}h ago (limit {limit_hours}h)")
+    if completion is None:
+        print(f"{workflow}: schedule grace anchor {age_hours}h ago (limit {limit_hours}h)")
+    else:
+        print(
+            f"{workflow}: last scheduled completion {conclusion} {age_hours}h ago "
+            f"(limit {limit_hours}h)"
+        )
     if age_hours > limit_hours:
-        raise Refused(f"{workflow} has not succeeded on schedule in {age_hours}h")
+        raise Refused(f"{workflow} has not completed on schedule in {age_hours}h")
 
 
 def parse_spec(value: str) -> tuple[str, int]:
