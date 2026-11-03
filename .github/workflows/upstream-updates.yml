@@ -152,12 +152,41 @@ jobs:
         id: validate
         if: steps.compare.outputs.changed == 'true'
         env:
+          NUMBER: ${{ steps.pr.outputs.number }}
           SHA: ${{ steps.branch.outputs.sha }}
         run: |
           set -euo pipefail
-          # `GITHUB_TOKEN` does not emit pull_request events, so the same
-          # workflow a human PR runs is dispatched against the branch ref. The
-          # check lands on the head SHA, which is what branch protection reads.
+          # The pull request was written through `GITHUB_TOKEN`, so its
+          # `pull_request` workflow is held for human approval. Wait for that
+          # exact, expected run to exist in the approval-required state instead
+          # of approving it through an ambient user token. The same workflow is
+          # then dispatched on the same branch head; its later, successful
+          # check is the one branch protection can evaluate.
+          timeout 60 gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls/${NUMBER}/files" \
+            --jq '.[].filename' > "$RUNNER_TEMP/pr-files.txt"
+          [ "$(cat "$RUNNER_TEMP/pr-files.txt")" = "Dockerfile" ] || {
+            echo "::error::upstream dependency PR may change only Dockerfile" >&2
+            cat "$RUNNER_TEMP/pr-files.txt" >&2
+            exit 1
+          }
+          approval_run=""
+          for _ in $(seq 1 30); do
+            approval_run="$(timeout 60 gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/validate.yml/runs?event=pull_request&branch=${BRANCH}&per_page=100" \
+              --jq "[.workflow_runs[] | select(.head_sha == \"${SHA}\" and .conclusion == \"action_required\")] | first | .id // empty")"
+            [ -n "$approval_run" ] && break
+            sleep 10
+          done
+          [[ "$approval_run" =~ ^[0-9]+$ ]] || {
+            echo "::error::the approval-required pull_request validate run never appeared" >&2
+            exit 1
+          }
+          echo "pull_request validate run ${approval_run} is approval-required"
+
+          # Dispatch only after the approval-required check exists. Branch
+          # protection then sees this later same-SHA success rather than the
+          # synthetic PR event that a write token cannot approve.
           timeout 60 gh workflow run validate.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
           run_id=""
           for _ in $(seq 1 30); do
@@ -178,8 +207,20 @@ jobs:
             echo "::error::validate finished ${conclusion} for ${SHA}" >&2
             exit 1
           }
+          merge_state=""
+          for _ in $(seq 1 30); do
+            merge_state="$(timeout 60 gh pr view "$NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --json mergeStateStatus --jq .mergeStateStatus)"
+            [ "$merge_state" = CLEAN ] && break
+            [ "$merge_state" = BLOCKED ] && break
+            sleep 10
+          done
+          [ "$merge_state" = CLEAN ] || {
+            echo "::error::pull request #${NUMBER} is ${merge_state} after a green same-SHA validate" >&2
+            exit 1
+          }
           echo "run=${run_id}" >> "$GITHUB_OUTPUT"
-          echo "validate ${conclusion} on ${SHA}"
+          echo "validate ${conclusion} on ${SHA}; pull request #${NUMBER} is ${merge_state}"
 
       - name: 🔀 Merge a validated upstream upgrade
         id: merge
