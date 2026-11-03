@@ -312,8 +312,19 @@ Actions SHA has a newer release. `dependabot-automerge.yml` checks the API diff
 against the trusted default branch and accepts only complete remote Action
 `uses: owner/action@40-sha # version` replacements for the same Action. Workflow
 logic, local actions, added/deleted files, short refs, missing comments and
-cross-hunk moves fail closed. The PR still runs the normal `validate` path;
-only a green required check is merged.
+cross-hunk moves fail closed. The required `validate` path repeats that API-diff
+check, so bypassing the auto-merge workflow cannot turn a broader Dependabot
+change green. Only a green required check is merged.
+
+Dependency bots cannot author a human round matrix, but the exemption is earned
+inside the required check rather than skipped wholesale. The
+`Automated dependency PR scope` step first requires a same-repository head. A
+Dependabot PR must contain only complete remote Action pin replacements,
+checked by the validator from the trusted base revision; a
+`github-actions[bot]` PR must come from `deps/upstream` and change exactly
+`Dockerfile`. Only after that proof does `Round matrix` skip the bot author, and
+the normal image/runtime gates still run. Removing the author, repository,
+branch, file or diff check fails `validate`.
 
 Run the check by hand without merging:
 

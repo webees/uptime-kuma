@@ -13,8 +13,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `5d60fd8` on 2026-11-04,
-extending the previous baseline at `18db182`. Every later round must extend that
+Audit baseline: every commit reachable through `0d18d11` on 2026-11-04,
+extending the previous baseline at `5d60fd8`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -438,6 +438,16 @@ waits for the required `validate` check, and then merges the PR directly. It
 rejects logic changes, new paths, local actions, short refs, missing version
 comments, incomplete pairs, and cross-hunk moves.
 
+The bot Matrix exemption failed once after real execution: run `41692407805`
+approved and ran the held `validate` check on PR #99, then failed because a bot
+PR cannot author a human `## Matrix`. Final decision: the required check owns
+the scope proof before it skips Matrix. A same-repository Dependabot PR must
+pass the same API-diff validator used by auto-merge, loaded from the trusted
+base revision; a `github-actions[bot]` PR must come from `deps/upstream` and
+change exactly `Dockerfile`. Removing the repository, branch, file or diff guard
+fails `validate`; the normal image and runtime gates still run afterwards.
+Neither bot receives a general skip.
+
 Publication history: the metadata step used to write `latest` before the image
 existed, so the mutable tag moved even when the digest smoke test, the deploy,
 or the readiness verification failed; a cancelled run left it on an unverified
@@ -515,6 +525,8 @@ Authority: `Dockerfile` digest/sha arguments,
 `scripts/check_schedules.py:check_workflow`, and
 `.github/workflows/dependabot-automerge.yml:validate-and-merge` with
 `scripts/validate_action_pin_update.py:validate`, and
+`.github/workflows/validate.yml:Automated dependency PR scope` with
+`scripts/validate_action_pin_update.py:validate`, and
 `.github/workflows/automation-health.yml:Deployment credentials are present and within policy`
 with `scripts/check_automation_credentials.py:check`.
 The recorded branch rule is `docs/branch_protection.json`, read by
@@ -553,6 +565,10 @@ disabled, stale, and future-dated workflow plus schedule-changing and unrelated
 recent commits, and
 `tests/test_action_pin_update.py:ActionPinUpdateTest` removes
 the API-diff validator and the Dependabot matrix exemption;
+`tests/test_recurring_gate.py:test_matrix_step_reads_the_pull_request_body`
+removes the bot scope step, relaxes the repository/branch/file proof, drops the
+Dependabot API-diff check, requires the `github-actions[bot]` matrix again, and
+reorders the scope after Matrix;
 the deploy verifier carries its own control that deletes the digest comparison. The
 port invariant is controlled inside
 `tests/test_recurring_gate.py:test_listen_port_is_unprivileged_and_matches_fly`,

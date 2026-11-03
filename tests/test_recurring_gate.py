@@ -431,10 +431,29 @@ def assert_matrix_gate_is_wired(case: unittest.TestCase, validate: str) -> None:
     """
     case.assertIn("scripts/pr_matrix.py", validate)
     case.assertIn("pull-requests: read", validate)
+    bot = validate.split("name: 🧾 Automated dependency PR scope", 1)
+    case.assertEqual(len(bot), 2, "the dependency-bot scope step is missing")
+    bot_body = bot[1].split("- name:", 1)[0]
+    case.assertIn("github.event.pull_request.user.login == 'dependabot[bot]'", bot_body)
+    case.assertIn("github.event.pull_request.user.login == 'github-actions[bot]'", bot_body)
+    case.assertIn("HEAD_REF: ${{ github.event.pull_request.head.ref }}", bot_body)
+    case.assertIn("HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}", bot_body)
+    case.assertIn("BASE: ${{ github.event.pull_request.base.sha }}", bot_body)
+    case.assertIn(': "${BASE:?a base commit is required}"', bot_body)
+    case.assertIn('[ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]', bot_body)
+    case.assertIn('[ "$HEAD_REF" = deps/upstream ]', bot_body)
+    case.assertIn('repos/${GITHUB_REPOSITORY}/pulls/${PR}/files', bot_body)
+    case.assertIn('[ "$(cat "$RUNNER_TEMP/dependency-files.txt")" = Dockerfile ]', bot_body)
+    case.assertIn("gh api --paginate --slurp", bot_body)
+    case.assertIn("scripts/validate_action_pin_update.py", bot_body)
+    case.assertIn('git show "${BASE}:scripts/validate_action_pin_update.py"', bot_body)
+    case.assertIn('python3 "$RUNNER_TEMP/validate_action_pin_update.py"', bot_body)
     step = validate.split("name: 🧾 Round matrix", 1)
     case.assertEqual(len(step), 2, "the matrix step is missing")
     body = step[1].split("- name:", 1)[0]
-    case.assertIn("if: github.event_name == 'pull_request'", body)
+    case.assertIn("github.event_name == 'pull_request'", body)
+    case.assertIn("github.event.pull_request.user.login != 'dependabot[bot]'", body)
+    case.assertIn("github.event.pull_request.user.login != 'github-actions[bot]'", body)
     # The body comes from the API, not from a checked-out file a PR can fake.
     case.assertIn("gh api", body)
     case.assertIn(".body", body)
@@ -448,6 +467,11 @@ def assert_matrix_gate_is_wired(case: unittest.TestCase, validate: str) -> None:
     case.assertIn("scripts/round_open.py --require-closed --entry", body)
     case.assertIn("github.event.pull_request.base.sha", body)
     case.assertIn(': "${BASE:?', body)
+    case.assertLess(
+        validate.index("name: 🧾 Automated dependency PR scope"),
+        validate.index("name: 🧾 Round matrix"),
+        "the dependency scope must be proved before its matrix exemption",
+    )
 
 
 def assert_caller_grants_the_called_permissions(
@@ -3145,12 +3169,23 @@ class RecurringContractTest(unittest.TestCase):
             assert_matrix_gate_is_wired(self, ungated)
         self.assertIn("round_open.py", str(missing.exception))
 
-        # Mutation control: without the base, an empty variable reaches the
-        # script as a ref name and the step reads `--entry` with no value.
+        # Mutation control: the trusted-base validator loses its base input.
         unset = validate.replace(': "${BASE:?a base commit is required}"\n', "", 1)
         self.assertNotEqual(unset, validate)
         with self.assertRaises(AssertionError):
             assert_matrix_gate_is_wired(self, unset)
+
+        # Mutation control: without the base, an empty variable reaches the
+        # matrix script as a ref name and `--entry` has no value.
+        before_matrix, separator, after_matrix = validate.partition("name: 🧾 Round matrix")
+        matrix_unset = (
+            before_matrix
+            + separator
+            + after_matrix.replace(': "${BASE:?a base commit is required}"\n', "", 1)
+        )
+        self.assertNotEqual(matrix_unset, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, matrix_unset)
 
         # Mutation control: the matrix is checked without the changed files, so
         # `未验证` passes on the very class the diff edits.
@@ -3165,6 +3200,84 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(empty, validate)
         with self.assertRaises(AssertionError):
             assert_matrix_gate_is_wired(self, empty)
+
+        # Mutation controls: every bot exemption must be earned by the required
+        # check itself, not by an external workflow that a merge might outrun.
+        unnamed = validate.replace(
+            "      - name: 🧾 Automated dependency PR scope",
+            "      - name: dependency scope",
+            1,
+        )
+        self.assertNotEqual(unnamed, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, unnamed)
+
+        foreign_repo = validate.replace(
+            '[ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] || {',
+            "true || {",
+            1,
+        )
+        self.assertNotEqual(foreign_repo, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, foreign_repo)
+
+        wrong_branch = validate.replace(
+            '[ "$HEAD_REF" = deps/upstream ] || {',
+            "true || {",
+            1,
+        )
+        self.assertNotEqual(wrong_branch, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, wrong_branch)
+
+        widened_files = validate.replace(
+            '[ "$(cat "$RUNNER_TEMP/dependency-files.txt")" = Dockerfile ] || {',
+            "true || {",
+            1,
+        )
+        self.assertNotEqual(widened_files, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, widened_files)
+
+        unchecked_dependabot = validate.replace(
+            "printf '%s' \"$files\" | python3 \"$RUNNER_TEMP/validate_action_pin_update.py\"",
+            "echo skipped",
+            1,
+        )
+        self.assertNotEqual(unchecked_dependabot, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, unchecked_dependabot)
+
+        branch_validator = validate.replace(
+            'git show "${BASE}:scripts/validate_action_pin_update.py"',
+            "cp scripts/validate_action_pin_update.py",
+            1,
+        )
+        self.assertNotEqual(branch_validator, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, branch_validator)
+
+        actions_matrix_required = validate.replace(
+            "github.event.pull_request.user.login != 'github-actions[bot]'",
+            "true",
+            1,
+        )
+        self.assertNotEqual(actions_matrix_required, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, actions_matrix_required)
+
+        scope_start = validate.index("      # Dependency bots cannot author")
+        matrix_start = validate.index("      # Every path proves the image")
+        build_start = validate.index("      - name: 🐳 Build and exercise the image")
+        reordered = (
+            validate[:scope_start]
+            + validate[matrix_start:build_start]
+            + validate[scope_start:matrix_start]
+            + validate[build_start:]
+        )
+        self.assertNotEqual(reordered, validate)
+        with self.assertRaises(AssertionError):
+            assert_matrix_gate_is_wired(self, reordered)
 
     def test_failure_notifications_are_wired_and_honest(self) -> None:
         workflows = {
