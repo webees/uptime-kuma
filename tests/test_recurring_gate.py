@@ -1112,7 +1112,14 @@ def assert_digest_scan_and_sbom_gate(case: unittest.TestCase, build: str) -> Non
         scan.index("Block on fixable HIGH and CRITICAL vulnerabilities"),
         "the complete inventory must be produced before the blocking scan",
     )
-    case.assertIn("github/codeql-action/upload-sarif@b20883b0cd1f46c72ae0ba6d1090936928f9fa30", scan)
+    # The pin rotates with Dependabot. Assert the stable contract instead of
+    # copying the current SHA into a second authority that will inevitably
+    # drift from the workflow it is meant to verify.
+    case.assertRegex(
+        scan,
+        r"(?m)^\s*uses: github/codeql-action/upload-sarif@[0-9a-f]{40}\s+"
+        r"#\s*v4\.\d+\.\d+$",
+    )
     case.assertIn("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", scan)
     case.assertIn('digest_name="${DIGEST//:/-}"', scan)
     case.assertIn("name: sbom-${{ steps.image.outputs.digest_name }}", scan)
@@ -3389,6 +3396,19 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(mutable, build)
         with self.assertRaises(AssertionError):
             assert_digest_scan_and_sbom_gate(self, mutable)
+
+        # Mutation control: a floating SARIF uploader must fail even when its
+        # action family is unchanged, so this guard does not merely check that
+        # the step exists.
+        mutable_sarif = re.sub(
+            r"(?m)^(\s*uses: github/codeql-action/upload-sarif@)[0-9a-f]{40}",
+            r"\1v4",
+            build,
+            count=1,
+        )
+        self.assertNotEqual(mutable_sarif, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, mutable_sarif)
 
         # Mutation control: a report-only scanner never blocks deployment.
         advisory = build.replace("exit-code: '1'", "exit-code: '0'", 1)
