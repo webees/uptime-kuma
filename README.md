@@ -388,13 +388,18 @@ python3.13 scripts/upstream_deps.py compare --uptime-version … --uptime-digest
   is delivered; the failed run remains the only signal. Trigger: the repository
   secret is absent. Observed by: `gh secret list` returning no
   `ALERT_WEBHOOK_URL` entry.
-- The hardened runtime image still reports 354 HIGH and 18 CRITICAL Debian
-  12.15 findings, all without a published fixed package. The complete result is
-  retained in SARIF, while deployment is blocked only for findings with an
-  available upgrade. Trigger: the inherited Debian packages have empty
-  `FixedVersion` values. Observed by: Trivy 0.70.0 on 2026-11-01 scanned
-  `uptime-kuma:security-test-v3`, found `fixable=0`, and the actionable gate
-  exited `0`.
+- The hardened runtime image still has 231 open Trivy code-scanning alerts:
+  9 critical and 222 high. Every alert has an empty `Fixed Version`, so the
+  actionable gate cannot block on an available upgrade. The nine critical
+  alerts cover `zlib1g`, `sqlite3`/`libsqlite3-0`, `python3-jwt`, `libxml2`,
+  `libglib2.0-0` and `gawk`. A reachability review found no demonstrated path
+  from the public web surface to their vulnerable parsers, but that does not
+  close the findings: the bundled SQLite 3.41.1 build is affected by
+  `CVE-2025-7458`, and application SQL must remain parameterized. Trigger:
+  Debian 12.15 package metadata supplies no fixed versions. Observed by: a
+  paginated GitHub code-scanning query on 2026-11-04 for release `v80` returned
+  231 open alerts, 9 critical, 222 high, and zero non-empty fix versions. The
+  detailed disposition is in `docs/recurring_issues.md`.
 
 ## 📝 License
 
