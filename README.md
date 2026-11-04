@@ -82,6 +82,10 @@ fly secrets set SMTP_USERNAME="sender@example.com"
 fly secrets set SMTP_PASSWORD="app-specific-password"
 ```
 
+Backup and freshness alerts call `msmtp` directly. The image intentionally
+contains no `bsd-mailx` client or local mail-transfer agent, so there is only
+one SMTP delivery path to the configured server.
+
 ### 3. Deploy
 
 ```bash

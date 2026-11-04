@@ -53,7 +53,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iputils-ping \
     sqlite3 \
     msmtp \
-    bsd-mailx \
     # Add Caddy repository
     && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
     | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \

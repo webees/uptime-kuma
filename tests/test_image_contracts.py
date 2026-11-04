@@ -169,6 +169,19 @@ process.stdout.write(JSON.stringify(versions));
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "600 node")
 
+    def test_smtp_has_no_local_mta_package(self) -> None:
+        result = docker(
+            "run", "--rm", "--entrypoint", "bash", IMAGE, "-c",
+            "set -e; command -v msmtp; "
+            "if command -v mail >/dev/null; then echo 'mail client is present'; exit 9; fi; "
+            "for package in bsd-mailx exim4-base libunbound8 libgnutls-dane0; do "
+            "if dpkg-query -W -f='${Status}' \"$package\" 2>/dev/null "
+            "| grep -qx 'install ok installed'; then echo \"$package is installed\"; exit 9; fi; "
+            "done",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(result.stdout.rstrip().endswith("/usr/bin/msmtp"))
+
     def test_caddyfile_adapts_with_and_without_an_allowlist(self) -> None:
         for value in ("", "status.example.org other.example.org"):
             result = docker(

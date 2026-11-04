@@ -29,6 +29,13 @@ RESTIC_ENV = {
     "RESTIC_DATA_DIR": "/w/data",
     "RESTIC_LOG_DIR": "/w/logs",
 }
+MAIL_ENV = {
+    "SMTP_HOST": "smtp.example.org",
+    "SMTP_FROM": "backup@example.org",
+    "SMTP_TO": "ops@example.org",
+    "SMTP_USERNAME": "smtp-user",
+    "SMTP_PASSWORD": "smtp-password",
+}
 PREPARE = "mkdir -p /w/data /w/repo /w/logs"
 
 # Byte-exact Caddyfile fragments, so the C1 mutation controls stay anchored to
@@ -893,6 +900,90 @@ def check_bounded_diagnostics(image: str) -> None:
         )
 
 
+def check_mailer(image: str) -> None:
+    """The backup mailer sends through msmtp without a local MTA."""
+    fake = (
+        "mkdir -p /w/bin\n"
+        "printf '%s\\n' '#!/bin/bash' "
+        "'printf \"%s\\\\n\" \"$*\" > /w/msmtp.args; cat > /w/msmtp.message' "
+        "> /w/bin/msmtp\n"
+        "chmod +x /w/bin/msmtp\n"
+    )
+    root = workspace()
+    result = run(
+        image,
+        fake
+        +
+        "rc=0; PATH=\"/w/bin:$PATH\" /restic.sh test >/w/stdout 2>/w/stderr || rc=$?\n"
+        "cat /w/stderr >&2\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n"
+        "printf '@ args=%s\\n' \"$(cat /w/msmtp.args 2>/dev/null || true)\"\n"
+        "printf '@ from=%s\\n' \"$(sed -n 's/^From: //p' /w/msmtp.message 2>/dev/null || true)\"\n"
+        "printf '@ to=%s\\n' \"$(sed -n 's/^To: //p' /w/msmtp.message 2>/dev/null || true)\"\n"
+        "printf '@ subject=%s\\n' \"$(sed -n 's/^Subject: //p' /w/msmtp.message 2>/dev/null || true)\"\n"
+        "printf '@ content_type=%s\\n' \"$(sed -n 's/^Content-Type: //p' /w/msmtp.message 2>/dev/null || true)\"\n"
+        "printf '@ body=%s\\n' \"$(tail -n 1 /w/msmtp.message 2>/dev/null || true)\"\n",
+        root,
+        env={**MAIL_ENV, "FLY_APP_NAME": "status-test"},
+    )
+    expect_pass(suite, result, "C6 msmtp mailer case runs", "C6 msmtp mailer case failed")
+    suite.same(
+        "C6 the backup mailer delegates directly to msmtp",
+        [
+            "@ rc=0",
+            "@ args=-- ops@example.org",
+            "@ from=backup@example.org",
+            "@ to=ops@example.org",
+            "@ subject=[status-test] Test Mail",
+            "@ content_type=text/plain; charset=UTF-8",
+            "@ body=Test email from status-test backup system.",
+        ],
+        probes(result),
+    )
+
+    def missing_peer(source: Path | None = None) -> Case:
+        return run(
+            image,
+            fake
+            + "rc=0; PATH=\"/w/bin:$PATH\" /restic.sh test >/w/stdout 2>/w/stderr || rc=$?\n"
+            "cat /w/stderr >&2\n"
+            "printf '@ rc=%s\\n' \"$rc\"\n"
+            "printf '@ calls=%s\\n' \"$(test -e /w/msmtp.args && echo yes || echo no)\"\n"
+            "printf '@ notified=%s\\n' \"$(grep -c 'Test mail sent' /w/stdout || true)\"\n",
+            workspace(),
+            env={"SMTP_HOST": "smtp.example.org", "SMTP_FROM": "backup@example.org"},
+            source=source,
+        )
+
+    result = missing_peer()
+    expect_pass(suite, result, "C6 missing test-mail peer case runs", "C6 missing test-mail peer failed")
+    suite.same(
+        "C6 a test mail without SMTP_TO fails before invoking msmtp",
+        ["@ rc=2", "@ calls=no", "@ notified=0"],
+        probes(result),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
+        unchecked = mutate(
+            RESTIC,
+            ((
+                '            if [ -z "${SMTP_HOST:-}" ] || [ -z "${SMTP_FROM:-}" ] || [ -z "${SMTP_TO:-}" ]; then\n'
+                '                echo "Error: SMTP_HOST, SMTP_FROM, and SMTP_TO are required for a test mail" >&2\n'
+                '                exit 2\n'
+                '            fi\n',
+                "",
+            ),),
+            Path(tmp),
+        )
+        control = missing_peer(unchecked)
+        expect_pass(suite, control, "C6 missing-peer mutation controls runs", "C6 missing-peer mutation failed")
+        suite.same(
+            "C6 mutation: without the peer guard a test mail loses its explicit failure",
+            ["@ rc=1", "@ calls=no", "@ notified=0"],
+            probes(control),
+        )
+
+
 def check_lock_and_state(image: str) -> None:
     """C6: one run at a time, and a status write never truncates the old marker."""
     root = workspace()
@@ -976,11 +1067,11 @@ def check_lock_and_state(image: str) -> None:
     )
 
     # Staleness is derived from the recorded success time, so the clock is
-    # pinned instead of racing a real 26h boundary. The mailer is a stub: the
-    # alert path is what is being asserted, not msmtp.
+    # pinned instead of racing a real 26h boundary. msmtp is a stub: the alert
+    # path is what is being asserted, not SMTP delivery.
     def stale_case(last_success: str, hours: str | None = None, source: Path | None = None) -> Case:
         root = workspace()
-        env = {"FIXED_NOW": "1790000000", "SMTP_TO": "admin@example"}
+        env = {"FIXED_NOW": "1790000000", **MAIL_ENV}
         if hours is not None:
             env["RESTIC_STALE_HOURS"] = hours
         return run(
@@ -989,16 +1080,16 @@ def check_lock_and_state(image: str) -> None:
             "printf '%s\\n' '#!/bin/bash'"
             " 'if [ \"$1\" = -u ] && [ \"$2\" = +%s ]; then echo \"$FIXED_NOW\"; exit 0; fi'"
             " 'exec /usr/bin/date \"$@\"' > /w/bin/date\n"
-            "printf '%s\\n' '#!/bin/bash' 'echo \"$*\" >> /w/mail.calls' > /w/bin/mail\n"
+            "printf '%s\\n' '#!/bin/bash' 'cat >> /w/msmtp.calls' > /w/bin/msmtp\n"
             "printf '%s\\n' '#!/bin/bash' 'exit 0' > /w/bin/restic\n"
-            "chmod +x /w/bin/date /w/bin/mail /w/bin/restic\n"
+            "chmod +x /w/bin/date /w/bin/msmtp /w/bin/restic\n"
             f"printf 'state=ok\\nupdated_at=1\\nlast_success={last_success}\\nmessage=old\\n'"
             " > /w/data/backup-status.txt\n"
             "rc=0; PATH=\"/w/bin:$PATH\" /restic.sh snapshots 2>/w/stderr || rc=$?\n"
             "cat /w/stderr >&2\n"
             "printf '@ rc=%s\\n' \"$rc\"\n"
             "printf '@ warn=%s\\n' \"$(grep -c 'older than' /w/stderr || true)\"\n"
-            "mails=0; [ ! -f /w/mail.calls ] || mails=\"$(grep -c 'Backup is stale' /w/mail.calls)\"\n"
+            "mails=0; [ ! -f /w/msmtp.calls ] || mails=\"$(grep -c 'Subject: .*Backup is stale' /w/msmtp.calls)\"\n"
             "printf '@ stale_mails=%s\\n' \"$mails\"\n",
             root,
             env=env,
@@ -1071,7 +1162,7 @@ def check_lock_and_state(image: str) -> None:
         last_success: str, hours: str | None = None, source: Path | None = None
     ) -> Case:
         root = workspace()
-        env = {"FIXED_NOW": "1790000000", "SMTP_TO": "admin@example"}
+        env = {"FIXED_NOW": "1790000000", **MAIL_ENV}
         if hours is not None:
             env["RESTIC_STALE_HOURS"] = hours
         return run(
@@ -1080,15 +1171,15 @@ def check_lock_and_state(image: str) -> None:
             "printf '%s\\n' '#!/bin/bash'"
             " 'if [ \"$1\" = -u ] && [ \"$2\" = +%s ]; then echo \"$FIXED_NOW\"; exit 0; fi'"
             " 'exec /usr/bin/date \"$@\"' > /w/bin/date\n"
-            "printf '%s\\n' '#!/bin/bash' 'echo \"$*\" >> /w/mail.calls' > /w/bin/mail\n"
-            "chmod +x /w/bin/date /w/bin/mail\n"
+            "printf '%s\\n' '#!/bin/bash' 'cat >> /w/msmtp.calls' > /w/bin/msmtp\n"
+            "chmod +x /w/bin/date /w/bin/msmtp\n"
             f"printf 'state=ok\\nupdated_at=1\\nlast_success={last_success}\\nmessage=old\\n'"
             " > /w/data/backup-status.txt\n"
             "rc=0; PATH=\"/w/bin:$PATH\" /restic.sh check-freshness 2>/w/stderr || rc=$?\n"
             "cat /w/stderr >&2\n"
             "printf '@ rc=%s\\n' \"$rc\"\n"
             "printf '@ state=%s\\n' \"$(sed -n 's/^state=//p' /w/data/backup-status.txt)\"\n"
-            "mails=0; [ ! -f /w/mail.calls ] || mails=\"$(grep -c 'Backup is stale' /w/mail.calls)\"\n"
+            "mails=0; [ ! -f /w/msmtp.calls ] || mails=\"$(grep -c 'Subject: .*Backup is stale' /w/msmtp.calls)\"\n"
             "printf '@ stale_mails=%s\\n' \"$mails\"\n",
             root,
             env=env,
@@ -1578,6 +1669,7 @@ def main() -> None:
         check_host_policy,
         check_restore_isolation,
         check_bounded_diagnostics,
+        check_mailer,
         check_lock_and_state,
         check_process_supervision,
         check_invalid_restart_delay,

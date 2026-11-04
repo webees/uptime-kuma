@@ -228,13 +228,30 @@ check_freshness() {
     return 1
 }
 
-# Send email notification
+# Add the headers msmtp does not synthesize, then hand the message directly to
+# the configured SMTP account. A local MTA only adds another package and failure
+# mode between the backup job and the same remote server.
+mail_message() {
+    local subject="$1"
+    [ -z "${SMTP_TO:-}" ] && return
+    {
+        printf 'From: %s\n' "$SMTP_FROM"
+        printf 'To: %s\n' "$SMTP_TO"
+        printf 'Subject: [%s] %s\n' "$APP_NAME" "$subject"
+        printf 'Date: %s\n' "$(date -R)"
+        printf 'MIME-Version: 1.0\n'
+        printf 'Content-Type: text/plain; charset=UTF-8\n'
+        printf 'Content-Transfer-Encoding: 8bit\n'
+        printf '\n'
+        cat
+    } | command msmtp -- "$SMTP_TO"
+}
+
+# Send the bounded backup log as an email notification.
 mail() {
     [ -z "${SMTP_TO:-}" ] && return
-    # Strip ANSI colors and set UTF-8
-    sed 's/\x1b\[[0-9;]*m//g' "$LOG" | command mail \
-        -a "Content-Type: text/plain; charset=UTF-8" \
-        -s "[$APP_NAME] $1" "$SMTP_TO"
+    # Strip ANSI colors before adding the UTF-8 message headers.
+    sed 's/\x1b\[[0-9;]*m//g' "$LOG" | mail_message "$1"
 }
 
 # "<label>" <limit> <command...>; bounded, logged, alerted, never exits.
@@ -539,8 +556,12 @@ main() {
         snapshots)   restic snapshots ;;
         check-freshness) check_freshness || exit 2 ;;
         test)
+            if [ -z "${SMTP_HOST:-}" ] || [ -z "${SMTP_FROM:-}" ] || [ -z "${SMTP_TO:-}" ]; then
+                echo "Error: SMTP_HOST, SMTP_FROM, and SMTP_TO are required for a test mail" >&2
+                exit 2
+            fi
             echo "Test email from $APP_NAME backup system." \
-                | command mail -s "[$APP_NAME] Test Mail" "$SMTP_TO" \
+                | mail_message "Test Mail" \
                 && echo "Test mail sent to $SMTP_TO"
             ;;
         *)
