@@ -14,8 +14,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `792f148` on 2026-11-04,
-extending the previous baseline at `d9f91b3`. Every later round must extend that
+Audit baseline: every commit reachable through `2548e9d` on 2026-11-04,
+extending the previous baseline at `792f148`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -374,10 +374,10 @@ SBOM was retained. Final decision: `scan` consumes the exact amd64 manifest
 digest recorded by `build`, generates a CycloneDX SBOM for that digest, and
 runs two Trivy passes against it. The complete HIGH/CRITICAL inventory is
 report-only and uploads SARIF; a second actionable pass fails on HIGH/CRITICAL
-findings with a fixed version. This split is deliberate: the inherited Debian
-12.15 base currently reports 354 HIGH and 18 CRITICAL findings, all with an
-empty `FixedVersion`, so making unfixed advisories blocking would keep every
-build permanently red without providing a remediation. The SBOM artifact is
+findings with a fixed version. This split is deliberate: the `v80` image
+currently has 231 open Trivy code-scanning alerts, 9 critical and 222 high, all
+with an empty `Fixed Version`, so making unfixed advisories blocking would keep
+every build permanently red without providing a remediation. The SBOM artifact is
 named from the digest and carries `sbom-image.txt`, so it cannot be silently
 attached to a different image. `deploy` needs both `build` and `scan`; a failed,
 missing, or report-only actionable pass therefore cannot deploy. Manual
@@ -395,8 +395,41 @@ lockfile and package-shipped historical lockfiles, then deletes
 `node_modules/.package-lock.json` stays because it records the installed tree;
 the application dependencies and that metadata remain loadable. On 2026-11-01,
 Trivy 0.70.0 reported `Node.js: 0` and the actionable gate exited `0` for
-`uptime-kuma:security-test-v3`; the Debian 12.15 result remained 354 HIGH and
-18 CRITICAL, all unfixed and explicitly retained in the full SARIF inventory.
+`uptime-kuma:security-test-v3`.
+
+On 2026-11-04, the paginated code-scanning API reported 231 open alerts for the
+`v80` image (`d5c8c290…`): 9 critical and 222 high. Every alert had an empty
+`Fixed Version`, so the actionable pass remained report-only for this inherited
+Debian 12.15 set while still failing on any future fixable HIGH/CRITICAL
+package. The nine critical alerts were assessed without closing or suppressing
+them:
+
+- `CVE-2023-45853` (`zlib1g` 1:1.2.13.dfsg-1) only affects MiniZip. The runtime
+  package has no MiniZip API path observed, and the Node binary does not link
+  the vulnerable system library.
+- `CVE-2025-7458` (`sqlite3` and `libsqlite3-0` 3.40.1, plus bundled SQLite
+  3.41.1) requires the attacker to execute arbitrary SQL. No public raw-SQL
+  endpoint was found and existing database calls are parameterized; continued
+  query review remains mandatory because the bundled engine is in range.
+- `CVE-2026-102267` and `CVE-2026-102268` (`python3-jwt` 2.6.0) require unsafe
+  JWT key substitution or redirect handling. The repository imports no Python
+  JWT module and the application is Node.js.
+- `CVE-2026-6653` (`libxml2` 2.9.14) requires malformed XML entity parsing. The
+  application has no observed path that feeds untrusted XML to system
+  `libxml2`.
+- `CVE-2026-58016` (`libglib2.0-0` 2.74.6) requires malformed D-Bus
+  introspection XML in `g_dbus_node_info_new_for_xml`; no D-Bus parsing path
+  was observed.
+- `CVE-2026-40469` (`gawk` 5.2.1) affects 32-bit builds, while the deployed
+  image is `x86_64`. `CVE-2026-40468` needs crafted awk input; repository awk
+  programs consume internally generated build or backup data, not public HTTP
+  input.
+
+This is a reachability assessment, not a fix or risk acceptance. The nine
+critical alerts remain open. The image already runs `apt-get dist-upgrade` on
+every build, and a Debian or Node-base major jump is not justified until fixed
+package metadata exists because it changes native-library and runtime
+compatibility. The weekly rebuild remains the detection and remediation path.
 
 Deployment-credential history: the publish path could start a release with an
 expired or missing Fly token, and the notification action treated a missing

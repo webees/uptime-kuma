@@ -1,6 +1,6 @@
 # Automation Inventory
 
-Audit baseline: `0d18d11` on 2026-11-04. This inventory answers whether the
+Audit baseline: `2548e9d` on 2026-11-04. This inventory answers whether the
 workflows and scripts are reachable, what each protects, and whether any can be
 removed. A script is a deletion candidate only after proving it has no caller,
 no runtime or release dependency, and no rollback value.
