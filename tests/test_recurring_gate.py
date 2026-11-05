@@ -1326,13 +1326,21 @@ def assert_latest_follows_verification(case: unittest.TestCase, build: str) -> N
         'latest_index=$LATEST_INDEX; latest_amd64=$LATEST_AMD64\n'
     ) + block(promote, final)
     env = os.environ | {"LATEST_INDEX": index, "LATEST_AMD64": index}
-    case.assertEqual(subprocess.run(["/bin/bash", "-c", script], env=env).returncode, 0)
+    accepted = subprocess.run(
+        ["/bin/bash", "-c", script], env=env, capture_output=True, text=True, check=False
+    )
+    case.assertEqual(accepted.returncode, 0, accepted.stderr)
+    # GitHub parses `::error::` in an inherited stderr stream as a workflow
+    # annotation even when this test expects the shell guard to reject input.
+    case.assertEqual(accepted.stderr, "")
     other = "sha256:" + "c" * 64
     for key in ("LATEST_INDEX", "LATEST_AMD64"):
-        case.assertNotEqual(
-            subprocess.run(["/bin/bash", "-c", script], env=env | {key: other}).returncode, 0,
-            f"{key} must be compared",
+        rejected = subprocess.run(
+            ["/bin/bash", "-c", script], env=env | {key: other},
+            capture_output=True, text=True, check=False,
         )
+        case.assertNotEqual(rejected.returncode, 0, f"{key} must be compared")
+        case.assertIn("latest does not reference the verified image", rejected.stderr)
 
 
 def assert_scheduled_rebuild_needs_drift(case: unittest.TestCase, build: str, script: str) -> None:
