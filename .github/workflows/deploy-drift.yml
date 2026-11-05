@@ -112,7 +112,11 @@ jobs:
           location="$(awk 'tolower($1) == "location:" { sub(/^[^:]+:[[:space:]]*/, ""); print }' \
             "$out/root.headers" | tail -n 1 | tr -d '\r')"
           test "$location" = /dashboard
-          echo "public app: /health=${health}, / ${root} to ${location}"
+
+          dashboard="$(curl --silent --show-error --max-time 20 \
+            --output /dev/null --write-out '%{http_code}' "${base}/dashboard")"
+          test "$dashboard" = 200
+          echo "public app: /health=${health}, / ${root} to ${location}, /dashboard=${dashboard}"
 
       - name: 🚨 Notify drift failure
         if: always() && (failure() || cancelled())
