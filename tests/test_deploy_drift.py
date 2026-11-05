@@ -75,7 +75,7 @@ def assert_trusted_checkout(case: unittest.TestCase, workflow: str) -> None:
 
 
 def assert_public_probe(case: unittest.TestCase, workflow: str) -> None:
-    """The public probe must cover both Caddy health and the application root."""
+    """The public probe must reach the application entry points, not just Caddy."""
     for fragment in (
         'host="$(jq -r \'.Hostname // empty\' "$out/status.json")"',
         '"${base}/health"',
@@ -83,6 +83,8 @@ def assert_public_probe(case: unittest.TestCase, workflow: str) -> None:
         '"${base}/"',
         'test "$root" = 302',
         'test "$location" = /dashboard',
+        '"${base}/dashboard"',
+        'test "$dashboard" = 200',
     ):
         case.assertIn(fragment, workflow)
 
@@ -111,6 +113,17 @@ class DriftWorkflowTrustTest(unittest.TestCase):
         # Mutation control: accepting a different / status lets a broken app
         # path read as healthy even though Caddy still answers /health.
         mutated = workflow.replace('test "$root" = 302', 'test "$root" = 200', 1)
+        self.assertNotEqual(mutated, workflow)
+        with self.assertRaises(AssertionError):
+            assert_public_probe(self, mutated)
+
+    def test_public_probe_reaches_the_dashboard_it_redirects_to(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        assert_public_probe(self, workflow)
+
+        # Mutation control: checking only the redirect target string does not
+        # prove that the application route behind it can answer.
+        mutated = workflow.replace('test "$dashboard" = 200', 'test "$dashboard" = 302', 1)
         self.assertNotEqual(mutated, workflow)
         with self.assertRaises(AssertionError):
             assert_public_probe(self, mutated)

@@ -14,8 +14,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `2548e9d` on 2026-11-04,
-extending the previous baseline at `792f148`. Every later round must extend that
+Audit baseline: every commit reachable through `cfb8efa` on 2026-11-05,
+extending the previous baseline at `2548e9d`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -573,7 +573,9 @@ machine must be `started`, report `host_status=ok`, and carry exactly one
 the job also requires public `/health` to return `200` and `/` to return `302`
 with `Location: /dashboard`; otherwise a live proxy could hide a dead Uptime
 Kuma process. Every read is bounded, and an unreadable document exits `2`
-rather than reading as "in sync"; the detector is after the fact by design,
+rather than reading as "in sync". The redirect target is probed directly and
+must return `200`; checking the `Location` string alone cannot prove that the
+application route behind it answers. The detector is after the fact by design,
 because a hand deploy cannot be blocked.
 It runs on `workflow_run` rather than the push, because a release and a machine
 move separately and reading between them looks like a broken app; the first
