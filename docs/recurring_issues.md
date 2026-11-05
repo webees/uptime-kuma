@@ -614,6 +614,9 @@ host-health and passing-health guards independently and proves stopped,
 unhealthy and failing inputs then read as `in sync`;
 `tests/test_deploy_drift.py:test_public_probe_checks_the_application_not_only_caddy`
 accepts a different root status and proves the application probe turns red;
+`tests/test_deploy_drift.py:test_public_probe_reaches_the_dashboard_it_redirects_to`
+changes the dashboard response to `302` and proves checking only the redirect
+target string is no longer sufficient;
 `tests/test_automation_credentials.py:test_webhook_anchor_mutation_turns_rejection_red`,
 `tests/test_automation_credentials.py:test_timezone_mutation_turns_rejection_red`, and
 `tests/test_automation_credentials.py:test_failure_output_never_contains_credential_values`
