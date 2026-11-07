@@ -14,8 +14,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `36426d1` on 2026-11-07,
-extending the previous baseline at `561025f`. Every later round must extend that
+Audit baseline: every commit reachable through `40e8b8a` on 2026-11-07,
+extending the previous baseline at `36426d1`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -600,6 +600,14 @@ drift script. It never checks out `workflow_run.head_sha`; that SHA is event
 metadata only, because executing event-selected code with registry and Fly
 credentials is an untrusted checkout.
 
+On 2026-11-07, scheduled drift run `42370206554` read a machine in Fly's
+transient `replacing` state while the publish workflow was performing its
+rolling update. The deploy-drift job now re-reads the release, machine, and
+`latest` documents in a bounded 20-attempt loop and retries only that exact
+`replacing` response. All other unreadable responses, including stopped,
+unhealthy, mismatched, and malformed machines, still exit `2` immediately;
+the retry cannot turn a real drift failure green.
+
 Authority: `Dockerfile` digest/sha arguments,
 `.github/workflows/validate.yml:validate`, and
 `.github/workflows/ghcr.yaml:digest`, plus
@@ -634,6 +642,9 @@ accepts a different root status and proves the application probe turns red;
 `tests/test_deploy_drift.py:test_public_probe_reaches_the_dashboard_it_redirects_to`
 changes the dashboard response to `302` and proves checking only the redirect
 target string is no longer sufficient;
+`tests/test_recurring_gate.py:test_deploy_drift_workflow_is_wired` replaces the
+narrow `replacing` match with `true` and proves a retry that catches every
+unreadable result fails the contract;
 `tests/test_automation_credentials.py:test_webhook_anchor_mutation_turns_rejection_red`,
 `tests/test_automation_credentials.py:test_timezone_mutation_turns_rejection_red`, and
 `tests/test_automation_credentials.py:test_failure_output_never_contains_credential_values`

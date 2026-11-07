@@ -609,6 +609,17 @@ def assert_drift_check_exists(case: unittest.TestCase, drift: str, build: str) -
     case.assertIn("set -euo pipefail", drift)
     case.assertIn('"${FLY_API_TOKEN:?', drift)
 
+    # A daily check can overlap Fly's rolling update. The retry is deliberately
+    # limited to the observed `replacing` state; any other unreadable state must
+    # still abort immediately instead of being hidden by the retry loop.
+    case.assertIn("max_attempts=20", drift)
+    case.assertIn(
+        'grep -Fq "a machine is not started: \'replacing\'" "$out/drift.err"',
+        drift,
+    )
+    case.assertIn("sleep 5", drift)
+    case.assertIn('exit "$rc"', drift)
+
     # A skipped publish has nothing to compare; a cancelled one still might.
     case.assertIn("github.event.workflow_run.conclusion != 'skipped'", drift)
     # The check executes the default branch's own configuration and script.
@@ -3904,12 +3915,25 @@ class RecurringContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_drift_check_exists(self, unbounded, build)
 
+        # Additional control: retrying every unreadable result would hide a
+        # real stopped or mismatched machine, so the narrow state match is
+        # required.
+        retries_everything = drift.replace(
+            'grep -Fq "a machine is not started: \'replacing\'" "$out/drift.err"',
+            "true",
+            1,
+        )
+        self.assertNotEqual(retries_everything, drift)
+        with self.assertRaises(AssertionError):
+            assert_drift_check_exists(self, retries_everything, build)
+
         # Fifth control: decide inline with jq instead of the tested script, so
         # the fail-closed exit codes and the fixtures stop applying.
         inline = drift.replace(
-            'python3 scripts/deploy_drift.py \\\n'
-            '            "$out/releases.json" "$out/status.json" "$out/latest.json"',
-            'jq -e . "$out/status.json" > /dev/null',
+            '            if python3 scripts/deploy_drift.py \\\n'
+            '              "$out/releases.json" "$out/status.json" "$out/latest.json" \\\n'
+            '              2> "$out/drift.err"; then\n',
+            '            if jq -e . "$out/status.json" > /dev/null; then\n',
             1,
         )
         self.assertNotEqual(inline, drift)

@@ -82,14 +82,36 @@ jobs:
           test -n "$app"
           out="$RUNNER_TEMP/drift"
           mkdir -p "$out"
-          # Every read is bounded and every read failing aborts: "cannot tell"
-          # must never be reported as "in sync".
-          timeout 60 flyctl releases -a "$app" --json > "$out/releases.json"
-          timeout 60 flyctl status -a "$app" --json > "$out/status.json"
-          timeout 120 docker buildx imagetools inspect \
-            "${REGISTRY}/${IMAGE_NAME}:latest" --raw > "$out/latest.json"
-          python3 scripts/deploy_drift.py \
-            "$out/releases.json" "$out/status.json" "$out/latest.json"
+          # A scheduled check can overlap a rolling deploy. Retry only the
+          # observed transient `replacing` state, with a bounded wait and a
+          # fresh read each time; every other unreadable state still fails
+          # closed immediately. This preserves the detector instead of turning
+          # a real stopped, unhealthy, or mismatched machine green.
+          attempt=0
+          max_attempts=20
+          while :; do
+            attempt=$((attempt + 1))
+            timeout 60 flyctl releases -a "$app" --json > "$out/releases.json"
+            timeout 60 flyctl status -a "$app" --json > "$out/status.json"
+            timeout 120 docker buildx imagetools inspect \
+              "${REGISTRY}/${IMAGE_NAME}:latest" --raw > "$out/latest.json"
+            if python3 scripts/deploy_drift.py \
+              "$out/releases.json" "$out/status.json" "$out/latest.json" \
+              2> "$out/drift.err"; then
+              cat "$out/drift.err" >&2
+              break
+            else
+              rc=$?
+              if [ "$rc" -eq 2 ] && [ "$attempt" -lt "$max_attempts" ] && \
+                grep -Fq "a machine is not started: 'replacing'" "$out/drift.err"; then
+                echo "deploy in progress; retrying drift check (attempt ${attempt}/${max_attempts})" >&2
+                sleep 5
+                continue
+              fi
+              cat "$out/drift.err" >&2
+              exit "$rc"
+            fi
+          done
 
       # Fly's machine check is answered by Caddy, not by Uptime Kuma. Probe the
       # application path too so a healthy proxy cannot hide a dead backend.
