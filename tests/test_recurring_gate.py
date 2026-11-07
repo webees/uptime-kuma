@@ -869,6 +869,13 @@ MIN_INSTALLER_TAR_OVERRIDES = {
     "cacache": (7, 5, 22),
 }
 
+CLOUDFLARED_COMMIT = "872b241f94871665c1c157adefcf90c11f0ead96"
+CLOUDFLARED_SOURCE_SHA256 = "cbf3820d9a88918941f14633ad50e72c81e73889cfceab5fb78b79b5b542d38f"
+CLOUDFLARED_GO_CHECKSUMS = {
+    "amd64": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40",
+    "arm64": "a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49",
+}
+
 
 def release_tuple(value: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
@@ -937,6 +944,81 @@ def assert_container_security_contract(case: unittest.TestCase, text: str) -> No
         r"&& rm -f /usr/local/bin/npm /usr/local/bin/npx",
         "npm and npx must be removed from the runtime image",
     )
+
+    case.assertIn(
+        "apt-get purge -y cloudflared",
+        text,
+        "the vulnerable distribution package must not remain on PATH",
+    )
+    case.assertIn(
+        "rm -f /usr/bin/cloudflared",
+        text,
+        "the vulnerable cloudflared binary must be removed even if it is unmanaged",
+    )
+    case.assertIn(
+        f"ARG CLOUDFLARED_COMMIT={CLOUDFLARED_COMMIT}",
+        text,
+        "cloudflared source must be pinned to one commit",
+    )
+    case.assertIn(
+        f"ARG CLOUDFLARED_SOURCE_SHA256={CLOUDFLARED_SOURCE_SHA256}",
+        text,
+        "cloudflared source archive checksum must be pinned",
+    )
+    case.assertIn(
+        "https://github.com/cloudflare/cloudflared/archive/${CLOUDFLARED_COMMIT}.tar.gz",
+        text,
+        "cloudflared must be downloaded from its pinned commit archive",
+    )
+    for arch, checksum in CLOUDFLARED_GO_CHECKSUMS.items():
+        case.assertIn(
+            f"ARG CLOUDFLARED_GO_SHA256_{arch}={checksum}",
+            text,
+            f"the {arch} Go compiler archive checksum must be pinned",
+        )
+    case.assertIn(
+        'printf \'%s  %s\\n\' "$go_sha" /tmp/go.tar.gz | sha256sum -c -',
+        text,
+        "the architecture-selected Go compiler archive must be verified",
+    )
+    case.assertIn(
+        'printf \'%s  %s\\n\' "$CLOUDFLARED_SOURCE_SHA256" '
+        "/tmp/cloudflared.tar.gz | sha256sum -c -",
+        text,
+        "the cloudflared source archive must be verified before extraction",
+    )
+    go_version = re.search(r"(?m)^ARG CLOUDFLARED_GO_VERSION=(\d+\.\d+\.\d+)$", text)
+    case.assertIsNotNone(go_version, "the cloudflared Go compiler is not pinned")
+    if go_version:
+        case.assertGreaterEqual(release_tuple(go_version.group(1)), (1, 27, 3))
+    x_net_version = re.search(r"(?m)^ARG CLOUDFLARED_X_NET_VERSION=(\d+\.\d+\.\d+)$", text)
+    case.assertIsNotNone(x_net_version, "the cloudflared x/net override is not pinned")
+    if x_net_version:
+        case.assertGreaterEqual(release_tuple(x_net_version.group(1)), (0, 62, 0))
+    for fragment, message in (
+        (
+            '--require="golang.org/x/net@v${CLOUDFLARED_X_NET_VERSION}"',
+            "the cloudflared module graph must require the patched x/net release",
+        ),
+        ("GOTOOLCHAIN=local", "the cloudflared build must not fetch an unpinned toolchain"),
+        (
+            "/usr/local/bin/cloudflared --version",
+            "the built cloudflared version must be exercised",
+        ),
+        (
+            "go version -m /usr/local/bin/cloudflared",
+            "the built cloudflared module graph must be inspected",
+        ),
+        (
+            '$2 == "golang.org/x/net" {print $3}',
+            "the build must assert the exact x/net module version",
+        ),
+        (
+            "= \"v${CLOUDFLARED_X_NET_VERSION}\"",
+            "the x/net assertion must compare against the pinned version",
+        ),
+    ):
+        case.assertIn(fragment, text, message)
 
 
 def workflow(name: str) -> str:
@@ -4554,6 +4636,48 @@ class RecurringMutationTest(unittest.TestCase):
             ),
             "obsolete healthcheck no longer removed": text.replace(
                 " /app/extra/healthcheck", "", 1
+            ),
+            "cloudflared package no longer purged": text.replace(
+                "    && apt-get purge -y cloudflared \\\n", "", 1
+            ),
+            "old cloudflared binary no longer removed": text.replace(
+                "    && rm -f /usr/bin/cloudflared \\\n", "", 1
+            ),
+            "cloudflared source commit unpinned": text.replace(
+                CLOUDFLARED_COMMIT, "main", 1
+            ),
+            "cloudflared source checksum removed": text.replace(
+                f"ARG CLOUDFLARED_SOURCE_SHA256={CLOUDFLARED_SOURCE_SHA256}",
+                "ARG CLOUDFLARED_SOURCE_SHA256=" + "0" * 64,
+                1,
+            ),
+            "cloudflared Go checksum removed": text.replace(
+                CLOUDFLARED_GO_CHECKSUMS["amd64"], "0" * 64, 1
+            ),
+            "cloudflared x/net downgraded": text.replace(
+                "ARG CLOUDFLARED_X_NET_VERSION=0.62.0",
+                "ARG CLOUDFLARED_X_NET_VERSION=0.61.0",
+                1,
+            ),
+            "cloudflared Go version downgraded": text.replace(
+                "ARG CLOUDFLARED_GO_VERSION=1.27.3",
+                "ARG CLOUDFLARED_GO_VERSION=1.27.2",
+                1,
+            ),
+            "cloudflared source checksum command removed": text.replace(
+                "    && printf '%s  %s\\n' \"$CLOUDFLARED_SOURCE_SHA256\" "
+                "/tmp/cloudflared.tar.gz | sha256sum -c - \\\n",
+                "",
+                1,
+            ),
+            "cloudflared version command removed": text.replace(
+                "    && /usr/local/bin/cloudflared --version \\\n", "", 1
+            ),
+            "cloudflared module inspection removed": text.replace(
+                "    && /tmp/go/bin/go version -m /usr/local/bin/cloudflared "
+                "> /tmp/cloudflared.buildinfo \\\n",
+                "",
+                1,
             ),
         }
         for label, mutated in mutations.items():

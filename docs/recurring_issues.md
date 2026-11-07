@@ -14,8 +14,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `561025f` on 2026-11-05,
-extending the previous baseline at `032681d`. Every later round must extend that
+Audit baseline: every commit reachable through `36426d1` on 2026-11-07,
+extending the previous baseline at `561025f`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -396,6 +396,19 @@ lockfile and package-shipped historical lockfiles, then deletes
 the application dependencies and that metadata remain loadable. On 2026-11-01,
 Trivy 0.70.0 reported `Node.js: 0` and the actionable gate exited `0` for
 `uptime-kuma:security-test-v3`.
+
+On 2026-11-07, the natural upstream-update run merged the dependency bump and
+immediately dispatched the publish workflow, whose actionable Trivy gate found
+`/usr/bin/cloudflared` still embedding `golang.org/x/net v0.61.0`; the fixed
+`v0.62.0` release made the HIGH finding blocking. The binary came from the
+inherited Debian package, so changing npm pins could not repair it. Final
+decision: purge that package, remove `/usr/bin/cloudflared` even if unmanaged,
+and compile `2026.10.7` from commit
+`872b241f94871665c1c157adefcf90c11f0ead96` with a checksum-pinned Go compiler and
+source archive. The build requires `golang.org/x/net v0.62.0`, executes the
+resulting binary's version command, and reads its embedded build metadata before
+the image can reach the actionable scan. This keeps cloudflared's runtime
+feature while preserving the required Trivy gate.
 
 On 2026-11-04, the paginated code-scanning API reported 231 open alerts for the
 `v80` image (`d5c8c290…`): 9 critical and 222 high. Every alert had an empty
