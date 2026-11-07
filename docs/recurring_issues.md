@@ -14,8 +14,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `561025f` on 2026-11-05,
-extending the previous baseline at `032681d`. Every later round must extend that
+Audit baseline: every commit reachable through `36426d1` on 2026-11-07,
+extending the previous baseline at `561025f`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -397,6 +397,19 @@ the application dependencies and that metadata remain loadable. On 2026-11-01,
 Trivy 0.70.0 reported `Node.js: 0` and the actionable gate exited `0` for
 `uptime-kuma:security-test-v3`.
 
+On 2026-11-07, the natural upstream-update run merged the dependency bump and
+immediately dispatched the publish workflow, whose actionable Trivy gate found
+`/usr/bin/cloudflared` still embedding `golang.org/x/net v0.61.0`; the fixed
+`v0.62.0` release made the HIGH finding blocking. The binary came from the
+inherited Debian package, so changing npm pins could not repair it. Final
+decision: purge that package, remove `/usr/bin/cloudflared` even if unmanaged,
+and compile `2026.10.7` from commit
+`872b241f94871665c1c157adefcf90c11f0ead96` with a checksum-pinned Go compiler and
+source archive. The build requires `golang.org/x/net v0.62.0`, executes the
+resulting binary's version command, and reads its embedded build metadata before
+the image can reach the actionable scan. This keeps cloudflared's runtime
+feature while preserving the required Trivy gate.
+
 On 2026-11-04, the paginated code-scanning API reported 231 open alerts for the
 `v80` image (`d5c8c290…`): 9 critical and 222 high. Every alert had an empty
 `Fixed Version`, so the actionable pass remained report-only for this inherited
@@ -609,6 +622,10 @@ The recorded branch rule is `docs/branch_protection.json`, read by
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
 `tests/test_recurring_gate.py:test_latest_is_promoted_only_after_verification`;
+`tests/test_recurring_gate.py:test_container_security_mutations_turn_red`
+removes the cloudflared package purge, Go/source checksums, x/net override and
+embedded-build assertions independently and proves each missing guard turns
+the runtime contract red;
 `tests/test_deploy_drift.py:DeployDriftMutationTest` removes the machine-state,
 host-health and passing-health guards independently and proves stopped,
 unhealthy and failing inputs then read as `in sync`;
@@ -699,7 +716,10 @@ requires the actionable pass to exit non-zero, and makes `deploy` wait for
 branch can run the scan without unlocking a non-main deploy. The runtime image
 contract separately proves `npm` and `npx` are absent, the hidden lockfile is
 present, root and nested historical lockfiles are absent, and the pinned
-application dependencies remain loadable. The
+application dependencies remain loadable. It also proves the distribution
+cloudflared package is purged, the source commit and both archives are pinned,
+the compiler cannot be auto-downloaded, and the resulting binary reports Go
+1.27.3 with `golang.org/x/net v0.62.0` before Trivy runs. The
 recorded app name matches the README and every `-a` in the deploy job, and
 renaming it in one place, or documenting the deploy token for another app,
 fails. The two verifier filters are executed
