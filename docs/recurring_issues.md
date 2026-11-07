@@ -622,6 +622,10 @@ The recorded branch rule is `docs/branch_protection.json`, read by
 Mutation control: `tests/test_recurring_gate.py:test_privacy_mutation_detects_planted_identifier`,
 `tests/test_recurring_gate.py:test_digest_mutation_allows_mutable_base` and
 `tests/test_recurring_gate.py:test_latest_is_promoted_only_after_verification`;
+`tests/test_recurring_gate.py:test_container_security_mutations_turn_red`
+removes the cloudflared package purge, Go/source checksums, x/net override and
+embedded-build assertions independently and proves each missing guard turns
+the runtime contract red;
 `tests/test_deploy_drift.py:DeployDriftMutationTest` removes the machine-state,
 host-health and passing-health guards independently and proves stopped,
 unhealthy and failing inputs then read as `in sync`;
@@ -712,7 +716,10 @@ requires the actionable pass to exit non-zero, and makes `deploy` wait for
 branch can run the scan without unlocking a non-main deploy. The runtime image
 contract separately proves `npm` and `npx` are absent, the hidden lockfile is
 present, root and nested historical lockfiles are absent, and the pinned
-application dependencies remain loadable. The
+application dependencies remain loadable. It also proves the distribution
+cloudflared package is purged, the source commit and both archives are pinned,
+the compiler cannot be auto-downloaded, and the resulting binary reports Go
+1.27.3 with `golang.org/x/net v0.62.0` before Trivy runs. The
 recorded app name matches the README and every `-a` in the deploy job, and
 renaming it in one place, or documenting the deploy token for another app,
 fails. The two verifier filters are executed
