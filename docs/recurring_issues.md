@@ -14,8 +14,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `695e343` on 2026-11-10,
-extending the previous baseline at `6c99a0e`. Every later round must extend that
+Audit baseline: every commit reachable through `4c56ccd` on 2026-11-10,
+extending the previous baseline at `695e343`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -389,8 +389,8 @@ SBOM was retained. Final decision: `scan` consumes the exact amd64 manifest
 digest recorded by `build`, generates a CycloneDX SBOM for that digest, and
 runs two Trivy passes against it. The complete HIGH/CRITICAL inventory is
 report-only and uploads SARIF; a second actionable pass fails on HIGH/CRITICAL
-findings with a fixed version. This split is deliberate: the `v80` image
-currently has 231 open Trivy code-scanning alerts, 9 critical and 222 high, all
+findings with a fixed version. This split is deliberate: the release 84 image
+snapshot has 403 open Trivy code-scanning alerts, 9 critical and 394 high, all
 with an empty `Fixed Version`, so making unfixed advisories blocking would keep
 every build permanently red without providing a remediation. The SBOM artifact is
 named from the digest and carries `sbom-image.txt`, so it cannot be silently
@@ -425,12 +425,12 @@ resulting binary's version command, and reads its embedded build metadata before
 the image can reach the actionable scan. This keeps cloudflared's runtime
 feature while preserving the required Trivy gate.
 
-On 2026-11-04, the paginated code-scanning API reported 231 open alerts for the
-`v80` image (`d5c8c290…`): 9 critical and 222 high. Every alert had an empty
-`Fixed Version`, so the actionable pass remained report-only for this inherited
-Debian 12.15 set while still failing on any future fixable HIGH/CRITICAL
-package. The nine critical alerts were assessed without closing or suppressing
-them:
+On 2026-11-10, the paginated code-scanning API reported 403 open alerts for the
+release 84 image (`4c56ccd`, analysis `2139163606`): 9 critical and 394 high.
+Every alert had an empty `Fixed Version`, so the actionable pass remained
+report-only for this inherited Debian 12.15 set while still failing on any
+future fixable HIGH/CRITICAL package. The nine critical alerts were assessed
+without closing or suppressing them:
 
 - `CVE-2023-45853` (`zlib1g` 1:1.2.13.dfsg-1) only affects MiniZip. The runtime
   package has no MiniZip API path observed, and the Node binary does not link
