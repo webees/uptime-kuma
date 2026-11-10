@@ -14,8 +14,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `9edf6c1` on 2026-11-09,
-extending the previous baseline at `40e8b8a`. Every later round must extend that
+Audit baseline: every commit reachable through `6c99a0e` on 2026-11-10,
+extending the previous baseline at `9edf6c1`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -459,6 +459,14 @@ guard lives in `scripts/check_automation_credentials.py:check` and
 The publish workflow also carries one weekly `schedule`, so a base-image or
 OS-package fix can ship without a code change. Scheduled runs use `main` HEAD
 and traverse the same validate -> build -> deploy chain.
+
+Docker layer cache history: the first rsync security update after the weekly
+probe was published was found by Trivy, but the production build replayed its
+old `apt-get dist-upgrade` layer from `type=gha` cache and shipped the vulnerable
+3.2.7 package. The scanner correctly blocked deployment. Final decision:
+production, tag, manual and scheduled builds set `no-cache: true` through the
+non-PR expression; pull-request builds may use cache for feedback. A mutation
+test removes or disables that setting and proves the gate turns red.
 
 Scheduled automation history: the weekly cron rebuilt unconditionally, so an
 image that was already current still cost a full build and a deploy, and every

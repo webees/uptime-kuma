@@ -1036,6 +1036,27 @@ def workflow(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
 
 
+def assert_production_build_refreshes_packages(case: unittest.TestCase, text: str) -> None:
+    """A cached apt layer must not hide newly published production fixes."""
+    match = re.search(
+        r"(?ms)^      - name: 🚀 Build and push Docker image \(Multi-Arch\)\n"
+        r"(?P<body>.*?)(?=^      - name:|\Z)",
+        text,
+    )
+    case.assertIsNotNone(match, "the production image build step is missing")
+    body = match.group("body") if match else ""
+    case.assertIn(
+        "          push: ${{ github.event_name != 'pull_request' }}",
+        body,
+        "the production build must remain the non-PR publish path",
+    )
+    case.assertIn(
+        "          no-cache: ${{ github.event_name != 'pull_request' }}",
+        body,
+        "production builds must refresh mutable OS package layers",
+    )
+
+
 def permissions_block(text: str) -> str:
     """The lines under a `permissions:` key, comments excluded, at any indent."""
     match = re.search(r"(?m)^( *)permissions:\n", text)
@@ -4614,6 +4635,27 @@ class RecurringContractTest(unittest.TestCase):
 
 
 class RecurringMutationTest(unittest.TestCase):
+    def test_production_builds_refresh_os_package_layers(self) -> None:
+        text = workflow("ghcr.yaml")
+        assert_production_build_refreshes_packages(self, text)
+
+        for label, mutated in {
+            "cached OS layers restored": text.replace(
+                "          no-cache: ${{ github.event_name != 'pull_request' }}\n",
+                "",
+                1,
+            ),
+            "cache bypass restricted to nothing": text.replace(
+                "          no-cache: ${{ github.event_name != 'pull_request' }}",
+                "          no-cache: false",
+                1,
+            ),
+        }.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(mutated, text)
+                with self.assertRaises(AssertionError):
+                    assert_production_build_refreshes_packages(self, mutated)
+
     def test_digest_mutation_allows_mutable_base(self) -> None:
         text = DOCKERFILE.read_text(encoding="utf-8")
         assert_base_image_is_pinned(self, text)
