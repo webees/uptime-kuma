@@ -4625,6 +4625,11 @@ class RecurringMutationTest(unittest.TestCase):
     def test_container_security_mutations_turn_red(self) -> None:
         text = DOCKERFILE.read_text(encoding="utf-8")
         assert_container_security_contract(self, text)
+        ws_pin = re.search(
+            r"(?<![\w./-])ws@[0-9]+\.[0-9]+\.[0-9]+", text
+        )
+        if ws_pin is None:
+            self.fail("the ws runtime dependency pin is missing")
 
         mutations = {
             "dist-upgrade removed": text.replace(
@@ -4640,7 +4645,9 @@ class RecurringMutationTest(unittest.TestCase):
                 1,
             ),
             "health port drifted": text.replace("127.0.0.1:3001", "127.0.0.1:3002", 1),
-            "runtime dependency downgraded": text.replace("ws@8.22.1", "ws@8.22.0", 1),
+            "runtime dependency downgraded": text.replace(
+                ws_pin.group(0), "ws@0.0.0", 1
+            ),
             "tar override removed": text.replace(
                 '        "overrides.node-gyp.tar=7.5.22" \\\n', "", 1
             ),
