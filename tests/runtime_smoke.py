@@ -449,7 +449,7 @@ def check_sqlite_consistency(image: str) -> None:
     result = run(
         image,
         "sqlite3 /w/data/kuma.db 'create table t(v); insert into t values(1);'\n"
-        "printf 'stale diagnostics\\n' > /w/data/error.log\n"
+        "printf 'application diagnostics\\n' > /w/data/error.log\n"
         "printf 'keep this data\\n' > /w/data/keep.txt\n"
         "echo stale > /w/data/kuma.db-wal\n"
         "echo stale > /w/data/kuma.db-shm\n"
@@ -461,7 +461,7 @@ def check_sqlite_consistency(image: str) -> None:
     suite.same("C3 snapshot has the copy", True, "/w/data/backup.bak" in result.output)
     for name in ("kuma.db", "kuma.db-wal", "kuma.db-shm"):
         suite.same(f"C3 live {name} excluded", False, f"/w/data/{name}\n" in result.output)
-    suite.same("C3 legacy error log excluded", False, "/w/data/error.log\n" in result.output)
+    suite.same("C3 application error log excluded", False, "/w/data/error.log\n" in result.output)
     suite.same("C3 ordinary data remains backed up", True, "/w/data/keep.txt\n" in result.output)
     suite.same("C3 copy is a usable database", "1", db_value(image, root, "select count(*) from t"))
 
@@ -508,7 +508,7 @@ def check_sqlite_consistency(image: str) -> None:
     control = run(
         image,
         "sqlite3 /w/data/kuma.db 'create table t(v);'\n"
-        "printf 'stale diagnostics\\n' > /w/data/error.log\n"
+        "printf 'application diagnostics\\n' > /w/data/error.log\n"
         "/restic.sh backup >/dev/null 2>&1 || exit 1\n"
         "ls=$(restic ls latest 2>&1)\n"
         "if printf '%s\\n' \"$ls\" | grep -qx /w/data/kuma.db; then echo '@ live=LIVE_IN_SNAPSHOT';"
@@ -520,7 +520,7 @@ def check_sqlite_consistency(image: str) -> None:
     )
     expect_pass(suite, control, "C3 mutation control still backs up", "C3 mutation control backup failed")
     suite.same(
-        "C3 mutation: live database and legacy error log return to the snapshot",
+        "C3 mutation: live database and application error log return to the snapshot",
         ["@ live=LIVE_IN_SNAPSHOT", "@ error_log=ERROR_LOG_IN_SNAPSHOT"],
         probes(control),
     )
@@ -730,8 +730,107 @@ def check_bounded_diagnostics(image: str) -> None:
     expect_pass(suite, result, "C5 an oversized existing log is trimmed", "C5 oversized log case failed")
     suite.same("C5 existing log is capped", True, int(result.body()[-1].split("=")[1]) <= 262144)
 
+    error_log = workspace()
+    result = run(
+        image,
+        "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+        "printf 'OLDEST-SENTINEL\\n' > /w/data/error.log\n"
+        "head -c 5000 /dev/zero | tr '\\0' 'x' >> /w/data/error.log\n"
+        "printf 'LATEST-SENTINEL\\n' >> /w/data/error.log\n"
+        "RESTIC_ERROR_LOG_MAX_BYTES=4096 /restic.sh backup >/dev/null 2>&1 || exit 1\n"
+        "printf '@ bytes=%s\\n' \"$(wc -c < /w/data/error.log)\"\n"
+        "if grep -q 'OLDEST-SENTINEL' /w/data/error.log; then echo '@ oldest=present';"
+        " else echo '@ oldest=absent'; fi\n"
+        "if grep -q 'LATEST-SENTINEL' /w/data/error.log; then echo '@ latest=present';"
+        " else echo '@ latest=absent'; fi\n",
+        error_log,
+    )
+    expect_pass(suite, result, "C5 oversized application diagnostics are trimmed", "C5 application diagnostic trim failed")
+    suite.same(
+        "C5 application diagnostics keep the newest bounded tail",
+        ["@ bytes=4096", "@ oldest=absent", "@ latest=present"],
+        probes(result),
+    )
+
+    exact_cap = workspace()
+    result = run(
+        image,
+        "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+        "head -c 4096 /dev/zero | tr '\\0' 'x' > /w/data/error.log\n"
+        "before=$(sha256sum /w/data/error.log | awk '{print $1}')\n"
+        "RESTIC_ERROR_LOG_MAX_BYTES=4096 /restic.sh backup >/dev/null 2>&1 || exit 1\n"
+        "after=$(sha256sum /w/data/error.log | awk '{print $1}')\n"
+        "if [ \"$before\" = \"$after\" ]; then echo '@ unchanged=yes'; else echo '@ unchanged=no'; fi\n",
+        exact_cap,
+    )
+    expect_pass(suite, result, "C5 exact-cap diagnostics run", "C5 exact-cap diagnostics failed")
+    suite.same("C5 exact-cap application diagnostics are unchanged", ["@ unchanged=yes"], probes(result))
+
+    symlink = workspace()
+    result = run(
+        image,
+        "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+        "printf 'outside\\n' > /w/outside\n"
+        "ln -s /w/outside /w/data/error.log\n"
+        "rc=0; /restic.sh backup >/dev/null 2>&1 || rc=$?\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n"
+        "printf '@ state=%s\\n' \"$(sed -n 's/^state=//p' /w/data/backup-status.txt)\"\n"
+        "printf '@ backend=%s\\n' \"$(test -f /w/repo/config && echo called || echo never)\"\n"
+        "printf '@ target=%s\\n' \"$(cat /w/outside)\"\n",
+        symlink,
+    )
+    expect_pass(suite, result, "C5 symlink diagnostics case runs", "C5 symlink diagnostics case failed")
+    suite.same(
+        "C5 symlinked application diagnostics fail closed without touching the target",
+        ["@ rc=2", "@ state=failed", "@ backend=never", "@ target=outside"],
+        probes(result),
+    )
+
+    non_regular = workspace()
+    result = run(
+        image,
+        "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+        "mkdir /w/data/error.log\n"
+        "rc=0; /restic.sh backup >/dev/null 2>&1 || rc=$?\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n"
+        "printf '@ state=%s\\n' \"$(sed -n 's/^state=//p' /w/data/backup-status.txt)\"\n"
+        "printf '@ backend=%s\\n' \"$(test -f /w/repo/config && echo called || echo never)\"\n",
+        non_regular,
+    )
+    expect_pass(suite, result, "C5 non-regular diagnostics case runs", "C5 non-regular diagnostics case failed")
+    suite.same(
+        "C5 non-regular application diagnostics fail closed",
+        ["@ rc=2", "@ state=failed", "@ backend=never"],
+        probes(result),
+    )
+
+    no_password = workspace()
+    result = run(
+        image,
+        "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+        "printf 'OLDEST-SENTINEL\\n' > /w/data/error.log\n"
+        "head -c 5000 /dev/zero | tr '\\0' 'x' >> /w/data/error.log\n"
+        "printf 'LATEST-SENTINEL\\n' >> /w/data/error.log\n"
+        "rc=0; RESTIC_PASSWORD= RESTIC_ERROR_LOG_MAX_BYTES=4096 /restic.sh backup >/dev/null 2>&1 || rc=$?\n"
+        "printf '@ rc=%s\\n' \"$rc\"\n"
+        "printf '@ state=%s\\n' \"$(sed -n 's/^state=//p' /w/data/backup-status.txt)\"\n"
+        "if grep -q 'OLDEST-SENTINEL' /w/data/error.log; then echo '@ oldest=present';"
+        " else echo '@ oldest=absent'; fi\n"
+        "if grep -q 'LATEST-SENTINEL' /w/data/error.log; then echo '@ latest=present';"
+        " else echo '@ latest=absent'; fi\n",
+        no_password,
+        env={"RESTIC_PASSWORD": ""},
+    )
+    expect_pass(suite, result, "C5 diagnostics are trimmed before credential validation", "C5 credential gate ran before diagnostics trim")
+    suite.same(
+        "C5 missing credentials still fail after applying the diagnostics cap",
+        ["@ rc=1", "@ state=failed", "@ oldest=absent", "@ latest=present"],
+        probes(result),
+    )
+
     for label, variable, value in (
         ("C5 zero log cap", "RESTIC_LOG_MAX_BYTES", "0"),
+        ("C5 zero application-log cap", "RESTIC_ERROR_LOG_MAX_BYTES", "0"),
         ("C5 fractional timeout", "RESTIC_QUICK_TIMEOUT", "1.5"),
         ("C5 negative directory cap", "RESTIC_LOG_DIR_MAX_BYTES", "-1"),
     ):
@@ -897,6 +996,41 @@ def check_bounded_diagnostics(image: str) -> None:
             "C5 mutation: an unmaintainable directory after the run becomes success",
             ["@ rc=0", "@ state=ok"],
             probes(control),
+        )
+
+    # Disabling the application-log trim leaves the diagnostic file above its
+    # cap while the backup still reports success: the cap is the only guard.
+    with tempfile.TemporaryDirectory(prefix="runtime-mutate-") as tmp:
+        skipped = mutate(
+            RESTIC,
+            (("    if ! trim_error_log; then\n", "    if false; then\n"),),
+            Path(tmp),
+        )
+        control_root = workspace()
+        control = run(
+            image,
+            "sqlite3 /w/data/kuma.db 'create table t(v)'\n"
+            "printf 'OLDEST-SENTINEL\\n' > /w/data/error.log\n"
+            "head -c 5000 /dev/zero | tr '\\0' 'x' >> /w/data/error.log\n"
+            "printf 'LATEST-SENTINEL\\n' >> /w/data/error.log\n"
+            "rc=0; RESTIC_ERROR_LOG_MAX_BYTES=4096 /restic.sh backup >/dev/null 2>&1 || rc=$?\n"
+            "printf '@ rc=%s\\n' \"$rc\"\n"
+            "if grep -q 'OLDEST-SENTINEL' /w/data/error.log; then echo '@ oldest=present';"
+            " else echo '@ oldest=absent'; fi\n"
+            "printf '@ bytes=%s\\n' \"$(wc -c < /w/data/error.log)\"\n",
+            control_root,
+            source=skipped,
+        )
+        expect_pass(suite, control, "C5 application-log mutation control still backs up", "C5 application-log mutation failed")
+        suite.same(
+            "C5 mutation: without the trim the diagnostic file remains oversized",
+            ["@ rc=0", "@ oldest=present"],
+            probes(control)[:2],
+        )
+        suite.same(
+            "C5 mutation: the untrimmed diagnostic file exceeds its cap",
+            True,
+            int(probes(control)[2].split("=")[1]) > 4096,
         )
 
 

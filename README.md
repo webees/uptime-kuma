@@ -205,10 +205,15 @@ verifies it, copies the current database to `kuma.db.previous`, swaps, then
 requires an application restart. Keep that rollback copy until the instance is
 confirmed healthy.
 
-Snapshots exclude the live SQLite files and the legacy top-level
-`/app/data/error.log`, which is stale diagnostics rather than application
-state. Other data files under `/app/data` remain backed up; current container
-output is available through `fly logs`.
+Snapshots exclude the live SQLite files and the active top-level
+`/app/data/error.log`. Uptime Kuma 2.5.9 writes errors to that file without
+rotation; on 2026-11-10 it had reached 441 MiB on a 974 MiB data volume. Every
+non-library `restic.sh` invocation now retains only the newest
+`RESTIC_ERROR_LOG_MAX_BYTES` of diagnostics (default 8 MiB, maximum 64 MiB)
+before backend work. A symlink, non-regular path, or failed trim stops the
+invocation instead of silently leaving an unbounded file. Other data files
+under `/app/data` remain backed up; current container output is available
+through `fly logs`.
 
 `restore-test` also starts an isolated Uptime Kuma against a copy of the
 restored database and requires `/` to return `302`. Monitors are deactivated in

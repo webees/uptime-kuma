@@ -26,16 +26,19 @@ APP_NAME="${FLY_APP_NAME:-Uptime Kuma}"
 DATA="${RESTIC_DATA_DIR:-/app/data}"
 DB="$DATA/kuma.db"
 DB_BAK="$DATA/backup.bak"
+ERROR_LOG="$DATA/error.log"
 LOG_DIR="${RESTIC_LOG_DIR:-/var/log/restic}"
 LOG="$LOG_DIR/$(date +%Y%m%d_%H%M%S).log"
 STATUS_FILE="$DATA/backup-status.txt"
 MAX_STATUS_BYTES=4096
 MAX_LOG_BYTES="${RESTIC_LOG_MAX_BYTES:-262144}"
 MAX_LOG_DIR_BYTES="${RESTIC_LOG_DIR_MAX_BYTES:-10485760}"
+MAX_ERROR_LOG_BYTES="${RESTIC_ERROR_LOG_MAX_BYTES:-8388608}"
 QUICK_TIMEOUT="${RESTIC_QUICK_TIMEOUT:-60}"
 LONG_TIMEOUT="${RESTIC_LONG_TIMEOUT:-1800}"
 LIMIT_LOG_BYTES=8388608
 LIMIT_LOG_DIR_BYTES=67108864
+LIMIT_ERROR_LOG_BYTES=67108864
 LIMIT_QUICK_TIMEOUT=3600
 LIMIT_LONG_TIMEOUT=86400
 STALE_HOURS="${RESTIC_STALE_HOURS:-26}"
@@ -119,6 +122,38 @@ trim_logs() {
         done
     fi
     return "$failed"
+}
+
+# Uptime Kuma appends diagnostics to this file without rotation. It is not
+# application state and is excluded from snapshots, but it shares the small
+# data volume, so retain only a bounded tail. Refuse symlinks and other
+# non-regular paths rather than atomically replacing a target outside $DATA.
+trim_error_log() {
+    local size tmp
+    if [ -L "$ERROR_LOG" ]; then
+        echo "Error: ${ERROR_LOG} must not be a symlink" >&2
+        return 1
+    fi
+    [ -e "$ERROR_LOG" ] || return 0
+    if [ ! -f "$ERROR_LOG" ]; then
+        echo "Error: ${ERROR_LOG} must be a regular file" >&2
+        return 1
+    fi
+    if ! size="$(wc -c < "$ERROR_LOG")"; then
+        echo "Error: cannot measure ${ERROR_LOG}" >&2
+        return 1
+    fi
+    [ "$size" -le "$MAX_ERROR_LOG_BYTES" ] && return 0
+    tmp="$(mktemp "${ERROR_LOG}.tmp.XXXXXX")" || return 1
+    if tail -c "$MAX_ERROR_LOG_BYTES" "$ERROR_LOG" > "$tmp" \
+        && mv -f "$tmp" "$ERROR_LOG" \
+        && [ "$(wc -c < "$ERROR_LOG")" -le "$MAX_ERROR_LOG_BYTES" ]; then
+        echo "Trimmed ${ERROR_LOG} to ${MAX_ERROR_LOG_BYTES} bytes" >&2
+        return 0
+    fi
+    rm -f "$tmp"
+    echo "Error: cannot trim ${ERROR_LOG}" >&2
+    return 1
 }
 
 # ── Bounded execution ────────────────────────────────────────────────────────
@@ -518,6 +553,7 @@ main() {
 
     require_bounded_int RESTIC_LOG_MAX_BYTES "$MAX_LOG_BYTES" "$LIMIT_LOG_BYTES" || exit 2
     require_bounded_int RESTIC_LOG_DIR_MAX_BYTES "$MAX_LOG_DIR_BYTES" "$LIMIT_LOG_DIR_BYTES" || exit 2
+    require_bounded_int RESTIC_ERROR_LOG_MAX_BYTES "$MAX_ERROR_LOG_BYTES" "$LIMIT_ERROR_LOG_BYTES" || exit 2
     require_bounded_int RESTIC_QUICK_TIMEOUT "$QUICK_TIMEOUT" "$LIMIT_QUICK_TIMEOUT" || exit 2
     require_bounded_int RESTIC_LONG_TIMEOUT "$LONG_TIMEOUT" "$LIMIT_LONG_TIMEOUT" || exit 2
     require_bounded_int RESTIC_STALE_HOURS "$STALE_HOURS" "$LIMIT_STALE_HOURS" || exit 2
@@ -529,14 +565,6 @@ main() {
         : >> "$LOG" || { echo "Error: cannot create ${LOG}" >&2; exit 2; }
     fi
 
-    if [ -z "${RESTIC_PASSWORD:-}" ]; then
-        case "$command" in
-            backup) write_status failed "RESTIC_PASSWORD not set" || : ;;
-        esac
-        echo "Error: RESTIC_PASSWORD not set" >&2
-        exit 1
-    fi
-
     load_status
     # A failed run records the reason and never a new success time. Exit 3 is a
     # deliberate skip, which must not look like a failure.
@@ -544,6 +572,16 @@ main() {
     trap 'rc=$?; if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
         write_status failed "${CURRENT_STEP:-Task failed} (exit ${rc})" || :
     fi' EXIT
+    CURRENT_STEP="Cannot enforce the application error-log cap"
+    if ! trim_error_log; then
+        echo "Error: cannot enforce the application error-log cap" >&2
+        exit 2
+    fi
+    if [ -z "${RESTIC_PASSWORD:-}" ]; then
+        CURRENT_STEP="RESTIC_PASSWORD not set"
+        echo "Error: RESTIC_PASSWORD not set" >&2
+        exit 1
+    fi
     initCfg
     # After initCfg so the mailer has its configuration when this warns. The
     # freshness gate mails on its own, so the advisory would only duplicate.

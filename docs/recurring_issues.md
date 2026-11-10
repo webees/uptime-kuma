@@ -14,8 +14,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `6c99a0e` on 2026-11-10,
-extending the previous baseline at `9edf6c1`. Every later round must extend that
+Audit baseline: every commit reachable through `695e343` on 2026-11-10,
+extending the previous baseline at `6c99a0e`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -147,18 +147,18 @@ Final decision: the backup takes a `.backup` snapshot, proves the copy with a
 single `ok` from `integrity_check`, and only then runs the backend. The live
 database and its `-journal`/`-wal`/`-shm` sidecars are excluded. Any failure
 aborts before the backend and records no success time; the temporary copy is
-removed on success and on failure. The legacy top-level `/app/data/error.log`
-is excluded as stale diagnostics rather than application state; ordinary data
-files under `/app/data` remain in the snapshot.
+removed on success and on failure. The active top-level `/app/data/error.log`
+is excluded as diagnostics rather than application state; ordinary data files
+under `/app/data` remain in the snapshot.
 
 Authority: `scripts/restic.sh:sqlite_snapshot` and
 `scripts/restic.sh:sqlite_check`.
 
 Mutation control: `tests/runtime_smoke.py:check_sqlite_consistency` (live files
-and the legacy error log backed up directly).
+and the application error log backed up directly).
 
 Regression gate: a healthy database yields an `ok` check, a corrupted one aborts
-without calling the backend, the snapshot contains no live file or legacy
+without calling the backend, the snapshot contains no live file or application
 `error.log`, an ordinary data file remains present, and the temporary copy never
 survives either outcome.
 
@@ -204,23 +204,38 @@ Final decision: output is bounded at capture time with `tail -c`, bounded again
 before it is persisted, and the log file is replaced atomically inside its byte
 cap. The per-file and per-directory caps are independent safeguards checked
 before work and again after backend work. Capture, trim, and write failures
-abort and record a failure instead of producing a false success.
+abort and record a failure instead of producing a false success. The
+application has a separate unbounded writer: Uptime Kuma 2.5.9 opens an append
+stream for every error and never rotates `/app/data/error.log`. That file is
+excluded from snapshots but shares the small data volume; on 2026-11-10 it
+reached 441 MiB and 5.93 million lines on a 974 MiB volume. Every non-library
+`restic.sh` invocation therefore retains only the newest
+`RESTIC_ERROR_LOG_MAX_BYTES` (default 8 MiB, maximum 64 MiB) before config and
+backend work. The replacement uses a sibling temporary file and preserves the
+latest tail; an exact-cap file is untouched, while symlinks and non-regular
+paths fail closed.
 
 Authority: `scripts/restic.sh:trim_logs`, `scripts/restic.sh:write_log_entry`,
-and `scripts/restic.sh:log`.
+`scripts/restic.sh:log`, and `scripts/restic.sh:trim_error_log`.
 
 Mutation control: `tests/runtime_smoke.py:check_bounded_diagnostics` (persist-time
 truncation removed, capture-failure guard removed, write-failure guard removed,
-then the post-run guard disabled). A broken `tail` only fails the first stdin
-capture, so removing that guard is what turns the same run from exit 2 into a
-false `ok`; the write control fails only `mktemp` and proves the same downgrade
-for persistence. The truncation control compares the mutated log against the
-guarded one in the same run, not against a byte count: the entries carry
-timestamps, so a literal count measured its own clock as much as the guard.
+the post-run guard disabled, then the application-log call disabled). A broken
+`tail` only fails the first stdin capture, so removing that guard is what turns
+the same run from exit 2 into a false `ok`; the write control fails only
+`mktemp` and proves the same downgrade for persistence. The truncation control
+compares the mutated log against the guarded one in the same run, not against a
+byte count: the entries carry timestamps, so a literal count measured its own
+clock as much as the guard. With the application-log call disabled, a backup
+still reports success while the diagnostic file remains above its configured
+cap.
 
 Regression gate: oversized output, a failing `tail`, an unmaintainable directory
 before work (backend never called), an unmaintainable directory after work, and
-a failing log write all fail closed inside their cap.
+a failing log write all fail closed inside their cap. Oversized application
+diagnostics retain the newest bytes at the configured cap, an exact-cap file is
+unchanged, and a symlink or non-regular diagnostic path stops the run before
+the backend.
 
 ## Backup Invocation Privilege
 
