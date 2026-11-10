@@ -51,7 +51,7 @@ first moving the corresponding tests and rollback evidence.
 | :--- | :--- | :--- | :--- |
 | GitHub Actions pins | daily | Dependabot grouped pull request; `validate` independently rechecks the API diff, then `dependabot-automerge.yml` waits for that required check and merges | none observed |
 | Uptime Kuma image, supercronic and direct Node.js packages | daily | `upstream-updates.yml` plus `upstream_deps.py`; `validate` proves the same-repository `deps/upstream` head changes only `Dockerfile`; tar overrides follow the direct `tar` pin; npm pins ahead of the registry's `latest` are retained | stable release merge requires the approved same-SHA `validate` to pass and branch protection `CLEAN`; no PAT or admin bypass; major npm updates use the same full image/runtime gate |
-| Base OS packages | weekly | `rebuild.sh` probe followed by build, scan, deploy and verify | unfixed Debian advisories remain report-only by design |
+| Base OS packages | weekly | `rebuild.sh` probe followed by a cache-bypassing production build, scan, deploy and verify | unfixed Debian advisories remain report-only by design |
 | Direct Node runtime packages and tar overrides | daily | `upstream-updates.yml` resolves the explicit package list, keeps all four tar overrides equal to the direct `tar` pin, and refuses missing or unexpected values | no separate lane required; image tests still cover the installed tree |
 
 ## Notification And Credential Boundary

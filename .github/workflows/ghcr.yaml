@@ -174,6 +174,9 @@ jobs:
           # Attestations ride along as extra index entries; the digest step
           # below still selects the plain linux/amd64 image manifest.
           provenance: true
+          # Debian package metadata is mutable. Reusing an apt layer can hide a
+          # newly published security fix from a production or weekly rebuild.
+          no-cache: ${{ github.event_name != 'pull_request' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

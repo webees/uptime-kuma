@@ -460,6 +460,14 @@ The publish workflow also carries one weekly `schedule`, so a base-image or
 OS-package fix can ship without a code change. Scheduled runs use `main` HEAD
 and traverse the same validate -> build -> deploy chain.
 
+Docker layer cache history: the first rsync security update after the weekly
+probe was published was found by Trivy, but the production build replayed its
+old `apt-get dist-upgrade` layer from `type=gha` cache and shipped the vulnerable
+3.2.7 package. The scanner correctly blocked deployment. Final decision:
+production, tag, manual and scheduled builds set `no-cache: true` through the
+non-PR expression; pull-request builds may use cache for feedback. A mutation
+test removes or disables that setting and proves the gate turns red.
+
 Scheduled automation history: the weekly cron rebuilt unconditionally, so an
 image that was already current still cost a full build and a deploy, and every
 such deploy moved `latest`. Final decision: `rebuild_check` probes the published
