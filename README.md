@@ -401,17 +401,17 @@ python3.13 scripts/upstream_deps.py compare --uptime-version … --uptime-digest
   is delivered; the failed run remains the only signal. Trigger: the repository
   secret is absent. Observed by: `gh secret list` returning no
   `ALERT_WEBHOOK_URL` entry.
-- The hardened runtime image still has 231 open Trivy code-scanning alerts:
-  9 critical and 222 high. Every alert has an empty `Fixed Version`, so the
-  actionable gate cannot block on an available upgrade. The nine critical
-  alerts cover `zlib1g`, `sqlite3`/`libsqlite3-0`, `python3-jwt`, `libxml2`,
-  `libglib2.0-0` and `gawk`. A reachability review found no demonstrated path
+- The hardened runtime image release 84 (`4c56ccd`) has 403 open Trivy
+  code-scanning alerts: 9 critical and 394 high. Every alert has an empty
+  `Fixed Version`, so the actionable gate cannot block on an available upgrade.
+  The nine critical alerts cover `zlib1g`, `sqlite3`/`libsqlite3-0`, `python3-jwt`,
+  `libxml2`, `libglib2.0-0` and `gawk`. A reachability review found no demonstrated path
   from the public web surface to their vulnerable parsers, but that does not
   close the findings: the bundled SQLite 3.41.1 build is affected by
   `CVE-2025-7458`, and application SQL must remain parameterized. Trigger:
   Debian 12.15 package metadata supplies no fixed versions. Observed by: a
-  paginated GitHub code-scanning query on 2026-11-04 for release `v80` returned
-  231 open alerts, 9 critical, 222 high, and zero non-empty fix versions. The
+  paginated GitHub code-scanning query on 2026-11-10 for release 84 returned
+  403 open alerts, 9 critical, 394 high, and zero non-empty fix versions. The
   detailed disposition is in `docs/recurring_issues.md`.
 
 ## 📝 License
