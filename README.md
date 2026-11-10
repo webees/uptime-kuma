@@ -304,7 +304,10 @@ with `GITHUB_TOKEN` creates an approval-required `pull_request` check. The
 workflow first proves that the PR changes only `Dockerfile`, identifies the
 exact held validator for the pushed SHA, and approves only that run through
 its scoped `actions: write` permission. It then waits for that validator to
-succeed and refuses to merge unless branch protection reports `CLEAN`; a PAT,
+succeed and refuses to merge unless branch protection reports `CLEAN`. Public
+release metadata and assets use bounded retries for transient HTTP failures,
+and the held-run lookup allows for GitHub's delayed `pull_request` scheduling.
+A PAT,
 `--admin`, a replacement dispatch or a synthetic success is never accepted. A
 stable update therefore merges on its own once the real `validate` check
 passes on the branch head, matching the Vaultwarden delivery model. A

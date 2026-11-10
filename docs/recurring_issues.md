@@ -485,7 +485,11 @@ check approval-required. The workflow first verifies that the PR changes only
 `Dockerfile`, identifies the expected held check for the exact pushed SHA, and
 approves only that run through its scoped `actions: write` permission. It then
 waits for the real validator to succeed and requires branch protection to
-report `CLEAN` before merging. No PAT, replacement dispatch, `--admin` merge or
+report `CLEAN` before merging. The held check can appear more than five minutes
+after the push, so the workflow polls for up to 30 minutes. Public metadata and
+asset reads retry only bounded transient HTTP failures, including observed
+GitHub `504` responses; permanent `4xx` failures remain immediate. No PAT,
+replacement dispatch, `--admin` merge or
 synthetic success is accepted. The approved run must complete successfully; a
 missing held check, a failed validator, a non-clean merge state, or a moved head
 fails closed. The

@@ -24,10 +24,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -40,6 +42,9 @@ UPSTREAM_REPO = "louislam/uptime-kuma"
 SUPERCRONIC_REPO = "aptible/supercronic"
 IMAGE_REPOSITORY = "louislam/uptime-kuma"
 HTTP_TIMEOUT = int(os.environ.get("UPSTREAM_DEPS_TIMEOUT") or 60)
+HTTP_ATTEMPTS = 3
+HTTP_RETRY_DELAY = 2
+TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_ASSET_BYTES = 64 * 1024 * 1024
 
@@ -91,18 +96,45 @@ def github_api(path: str) -> object:
     return fetch_json(f"https://api.github.com{path}", headers)
 
 
+def transient_http_error(error: BaseException) -> bool:
+    """Whether retrying one public read can recover without changing meaning."""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in TRANSIENT_HTTP_STATUSES
+    if isinstance(error, urllib.error.URLError):
+        return isinstance(error.reason, (TimeoutError, ConnectionError))
+    return isinstance(error, (TimeoutError, ConnectionError, http.client.HTTPException))
+
+
+def fetch_response(
+    request: urllib.request.Request, max_bytes: int, noun: str = "response"
+) -> tuple[bytes, object]:
+    """Read one bounded response, retrying only bounded transient failures."""
+    for attempt in range(1, HTTP_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as answer:
+                headers = answer.headers
+                length = headers.get("Content-Length", "")
+                if length.isdigit() and int(length) > max_bytes:
+                    raise Refused(f"{request.full_url}: {noun} exceeds {max_bytes} bytes")
+                payload = answer.read(max_bytes + 1)
+            if len(payload) > max_bytes:
+                raise Refused(f"{request.full_url}: {noun} exceeds {max_bytes} bytes")
+            return payload, headers
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
+            if attempt == HTTP_ATTEMPTS or not transient_http_error(error):
+                raise Refused(f"{request.full_url}: {error}") from error
+            delay = HTTP_RETRY_DELAY * (2 ** (attempt - 1))
+            print(
+                f"{request.full_url}: transient read failure; retrying in {delay}s: {error}",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+    raise AssertionError("bounded HTTP retry loop exhausted without returning or raising")
+
+
 def fetch_json(url: str, headers: dict[str, str] | None = None) -> object:
     request = urllib.request.Request(url, headers=headers or {})
-    try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as answer:
-            length = answer.headers.get("Content-Length", "")
-            if length.isdigit() and int(length) > MAX_JSON_BYTES:
-                raise Refused(f"{url}: response exceeds {MAX_JSON_BYTES} bytes")
-            payload = answer.read(MAX_JSON_BYTES + 1)
-    except (urllib.error.URLError, OSError) as error:
-        raise Refused(f"{url}: {error}") from error
-    if len(payload) > MAX_JSON_BYTES:
-        raise Refused(f"{url}: response exceeds {MAX_JSON_BYTES} bytes")
+    payload, _ = fetch_response(request, MAX_JSON_BYTES)
     try:
         return json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -111,16 +143,7 @@ def fetch_json(url: str, headers: dict[str, str] | None = None) -> object:
 
 def fetch_bytes(url: str, headers: dict[str, str] | None = None) -> bytes:
     request = urllib.request.Request(url, headers=headers or {})
-    try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as answer:
-            length = answer.headers.get("Content-Length", "")
-            if length.isdigit() and int(length) > MAX_ASSET_BYTES:
-                raise Refused(f"{url}: asset exceeds {MAX_ASSET_BYTES} bytes")
-            payload = answer.read(MAX_ASSET_BYTES + 1)
-    except (urllib.error.URLError, OSError) as error:
-        raise Refused(f"{url}: {error}") from error
-    if len(payload) > MAX_ASSET_BYTES:
-        raise Refused(f"{url}: asset exceeds {MAX_ASSET_BYTES} bytes")
+    payload, _ = fetch_response(request, MAX_ASSET_BYTES, noun="asset")
     return payload
 
 
@@ -146,11 +169,8 @@ def release_digest(tag: str) -> str:
             ),
         },
     )
-    try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as answer:
-            digest = answer.headers.get("Docker-Content-Digest", "")
-    except (urllib.error.URLError, OSError) as error:
-        raise Refused(f"{IMAGE_REPOSITORY}:{tag}: {error}") from error
+    _, headers = fetch_response(request, MAX_JSON_BYTES)
+    digest = headers.get("Docker-Content-Digest", "")
     if not DIGEST.match(digest):
         raise Refused(f"{IMAGE_REPOSITORY}:{tag} has no usable digest: {digest!r}")
     return digest

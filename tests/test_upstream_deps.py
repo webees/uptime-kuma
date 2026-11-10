@@ -9,6 +9,7 @@ import io
 import json
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -27,6 +28,21 @@ def load_module():
 
 
 upstream = load_module()
+
+
+class FetchResponse:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+        self.headers = {"Content-Length": str(len(payload))}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, _limit: int) -> bytes:
+        return self.payload
 
 
 def next_major(version: str) -> str:
@@ -182,6 +198,48 @@ class NpmPinTest(unittest.TestCase):
         self.assertEqual(workflow.count('--npm-versions-json "$NPM_VERSIONS_JSON"'), 2)
         self.assertIn("timeout 300 python3 scripts/upstream_deps.py", workflow)
         self.assertIn("tee \"$RUNNER_TEMP/pins.diff\"", workflow)
+
+
+class FetchRetryTest(unittest.TestCase):
+    def test_transient_asset_failure_is_retried_before_success(self) -> None:
+        timeout = urllib.error.HTTPError(
+            "https://example.test/asset", 504, "Gateway Timeout", {}, None
+        )
+        with mock.patch.object(
+            upstream.urllib.request,
+            "urlopen",
+            side_effect=[timeout, FetchResponse(b"payload")],
+        ), mock.patch.object(upstream.time, "sleep") as sleep:
+            self.assertEqual(upstream.fetch_bytes("https://example.test/asset"), b"payload")
+        sleep.assert_called_once_with(upstream.HTTP_RETRY_DELAY)
+
+    def test_permanent_http_failure_is_not_retried(self) -> None:
+        missing = urllib.error.HTTPError(
+            "https://example.test/missing", 404, "Not Found", {}, None
+        )
+        with mock.patch.object(
+            upstream.urllib.request, "urlopen", side_effect=missing
+        ), mock.patch.object(upstream.time, "sleep") as sleep:
+            with self.assertRaises(upstream.Refused):
+                upstream.fetch_bytes("https://example.test/missing")
+        sleep.assert_not_called()
+
+    def test_transient_failure_retries_are_bounded(self) -> None:
+        timeout = urllib.error.HTTPError(
+            "https://example.test/asset", 504, "Gateway Timeout", {}, None
+        )
+        with mock.patch.object(
+            upstream.urllib.request,
+            "urlopen",
+            side_effect=[timeout] * upstream.HTTP_ATTEMPTS,
+        ) as urlopen, mock.patch.object(upstream.time, "sleep") as sleep:
+            with self.assertRaisesRegex(upstream.Refused, "Gateway Timeout"):
+                upstream.fetch_bytes("https://example.test/asset")
+        self.assertEqual(urlopen.call_count, upstream.HTTP_ATTEMPTS)
+        self.assertEqual(
+            sleep.call_args_list,
+            [mock.call(upstream.HTTP_RETRY_DELAY), mock.call(upstream.HTTP_RETRY_DELAY * 2)],
+        )
 
 
 if __name__ == "__main__":
