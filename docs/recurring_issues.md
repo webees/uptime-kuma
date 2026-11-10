@@ -14,8 +14,8 @@ The recurring pattern is not only missing code; it is removing an existing
 invariant while optimizing line count. Commit identifiers below are evidence,
 not exceptions to the rules.
 
-Audit baseline: every commit reachable through `40e8b8a` on 2026-11-07,
-extending the previous baseline at `36426d1`. Every later round must extend that
+Audit baseline: every commit reachable through `9edf6c1` on 2026-11-09,
+extending the previous baseline at `40e8b8a`. Every later round must extend that
 audit to every commit reachable at its start. The count is not written here: it
 changes the moment the commit recording it merges, so `scripts/round_open.py`
 derives it, and `--require-closed --entry "$BASE"` fails the PR whose baseline
@@ -485,7 +485,15 @@ check approval-required. The workflow first verifies that the PR changes only
 `Dockerfile`, identifies the expected held check for the exact pushed SHA, and
 approves only that run through its scoped `actions: write` permission. It then
 waits for the real validator to succeed and requires branch protection to
-report `CLEAN` before merging. No PAT, replacement dispatch, `--admin` merge or
+report `CLEAN` before merging. Natural run `42597059408` exhausted the former
+five-minute lookup without the held check appearing, so the workflow now polls
+for up to 30 minutes. Natural run `42795296782` then approved the held check,
+but its security contract still replaced a hard-coded `ws@8.22.1` even though
+PR #122 had moved the pin to `8.22.2`; the mutation now derives the current pin
+before downgrading it. Public metadata and asset reads make three bounded
+attempts with `2s`/`4s` backoff for `429`, `500`, `502`, `503`, `504`, and
+transient network failures; permanent `4xx` failures remain immediate. No PAT,
+replacement dispatch, `--admin` merge or
 synthetic success is accepted. The approved run must complete successfully; a
 missing held check, a failed validator, a non-clean merge state, or a moved head
 fails closed. The
@@ -661,7 +669,16 @@ controls the merge boundary, publish dispatch, and mutual watchdog links, and
 controls bounded resolution and the five-line rewrite, and
 `tests/test_upstream_deps.py:test_compare_and_apply_do_not_downgrade_an_ahead_pin`
 changes the registry target below the existing pin and proves compare stays
-unchanged while apply refuses the rollback; the same suite rejects deprecated,
+unchanged while apply refuses the rollback;
+`tests/test_upstream_deps.py:test_transient_asset_failure_is_retried_before_success`
+proves a `504` recovers on the next bounded attempt;
+`tests/test_upstream_deps.py:test_permanent_http_failure_is_not_retried`
+proves a `404` fails immediately; and
+`tests/test_upstream_deps.py:test_transient_failure_retries_are_bounded`
+proves the `2s`/`4s` sequence stops after three attempts.
+`tests/test_recurring_gate.py:test_container_security_mutations_turn_red`
+derives the live `ws@` pin before forcing a downgrade, so a dependency bump
+cannot silently remove that mutation. The same suite rejects deprecated,
 prerelease, identity-drift, missing, unexpected, and divergent tar metadata,
 then verifies the workflow carries the resolved package map into both compare
 and apply, and

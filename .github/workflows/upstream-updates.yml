@@ -168,8 +168,10 @@ jobs:
             cat "$RUNNER_TEMP/pr-files.txt" >&2
             exit 1
           }
+          # GitHub can delay a held pull_request run behind a busy hosted-runner
+          # queue. Observed latency exceeds five minutes; keep polling for 30.
           approval_run=""
-          for _ in $(seq 1 30); do
+          for _ in $(seq 1 180); do
             approval_run="$(timeout 60 gh api \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/validate.yml/runs?event=pull_request&branch=${BRANCH}&per_page=100" \
               --jq "[.workflow_runs[] | select(.head_sha == \"${SHA}\" and .conclusion == \"action_required\")] | first | .id // empty")"
