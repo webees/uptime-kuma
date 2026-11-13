@@ -4672,6 +4672,11 @@ class RecurringMutationTest(unittest.TestCase):
         )
         if ws_pin is None:
             self.fail("the ws runtime dependency pin is missing")
+        tar_override = re.search(
+            r'        "overrides\.node-gyp\.tar=\d+\.\d+\.\d+" \\\n', text
+        )
+        if tar_override is None:
+            self.fail("the tar override pin is missing")
 
         mutations = {
             "dist-upgrade removed": text.replace(
@@ -4690,9 +4695,7 @@ class RecurringMutationTest(unittest.TestCase):
             "runtime dependency downgraded": text.replace(
                 ws_pin.group(0), "ws@0.0.0", 1
             ),
-            "tar override removed": text.replace(
-                '        "overrides.node-gyp.tar=7.5.22" \\\n', "", 1
-            ),
+            "tar override removed": text.replace(tar_override.group(0), "", 1),
             "nested lock cleanup removed": text.replace(
                 "\n    && find /app/node_modules -type f -name package-lock.json -delete",
                 "",
