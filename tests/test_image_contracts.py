@@ -20,6 +20,7 @@ MIN_RUNTIME_DEPENDENCIES = {
     "axios": (0, 34, 0),
     "body-parser": (1, 20, 9),
     "follow-redirects": (1, 16, 2),
+    "jsonata": (2, 2, 1),
     "liquidjs": (10, 30, 1),
     "mysql2": (3, 24, 6),
     "nodemailer": (10, 3, 1),
