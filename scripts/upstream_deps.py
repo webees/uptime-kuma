@@ -64,6 +64,7 @@ DIRECT_NPM_PACKAGES = (
     "axios",
     "body-parser",
     "follow-redirects",
+    "jsonata",
     "liquidjs",
     "mysql2",
     "nodemailer",
