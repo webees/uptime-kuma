@@ -1,10 +1,10 @@
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║ Uptime Kuma Deployment                                                    ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
-ARG UPTIME_KUMA_VERSION=2.5.9
+ARG UPTIME_KUMA_VERSION=2.5.11
 
 # Pinned index digest: a retagged beta can never silently change the base.
-FROM louislam/uptime-kuma:${UPTIME_KUMA_VERSION}@sha256:e88415a90dd2f7efecdbc18de0490aff292764a3ac471531bf1d0481725591bd
+FROM louislam/uptime-kuma:${UPTIME_KUMA_VERSION}@sha256:7554dba313c84e44fee921ef3b5626ba1c711e412e82815e8c957517026112a9
 
 # ── Build Args ────────────────────────────────────────────────────────────────
 ARG TARGETARCH
@@ -136,13 +136,13 @@ RUN set -eu \
 # Kuma's application source.
 RUN cd /app \
     && npm pkg set \
-        "overrides.@louislam/sqlite3.tar=7.5.22" \
-        "overrides.@mapbox/node-pre-gyp.tar=7.5.22" \
-        "overrides.node-gyp.tar=7.5.22" \
-        "overrides.cacache.tar=7.5.22" \
+        "overrides.@louislam/sqlite3.tar=7.5.23" \
+        "overrides.@mapbox/node-pre-gyp.tar=7.5.23" \
+        "overrides.node-gyp.tar=7.5.23" \
+        "overrides.cacache.tar=7.5.23" \
     && npm install --save-exact --omit=dev --no-audit --no-fund \
         @azure/identity@4.14.1 \
-        @azure/msal-node@7.2.1 \
+        @azure/msal-node@7.2.2 \
         @grpc/grpc-js@1.14.7 \
         axios@1.21.1 \
         body-parser@2.4.0 \
@@ -152,8 +152,8 @@ RUN cd /app \
         nodemailer@10.5.0 \
         protobufjs@8.8.1 \
         redbean-node@0.4.0 \
-        tar@7.5.22 \
-        ws@8.22.2 \
+        tar@7.5.23 \
+        ws@8.23.0 \
     # The runtime never installs packages. Removing the generated root lockfile
     # and package-shipped historical lockfiles stops image scanners from
     # inventorying unreachable dev-only dependencies as runtime packages. The
