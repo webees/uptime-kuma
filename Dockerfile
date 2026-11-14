@@ -147,7 +147,7 @@ RUN cd /app \
         axios@1.21.1 \
         body-parser@2.4.0 \
         follow-redirects@1.16.3 \
-        jsonata@2.2.1 \
+        jsonata@2.2.2 \
         liquidjs@10.30.1 \
         mysql2@3.24.6 \
         nodemailer@10.5.0 \
