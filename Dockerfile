@@ -150,7 +150,7 @@ RUN cd /app \
         jsonata@2.2.2 \
         liquidjs@10.30.1 \
         mysql2@3.24.6 \
-        nodemailer@10.5.0 \
+        nodemailer@10.6.0 \
         protobufjs@8.8.1 \
         redbean-node@0.4.0 \
         tar@7.5.23 \
