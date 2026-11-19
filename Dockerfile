@@ -142,7 +142,7 @@ RUN cd /app \
         "overrides.cacache.tar=7.5.23" \
     && npm install --save-exact --omit=dev --no-audit --no-fund \
         @azure/identity@4.14.1 \
-        @azure/msal-node@7.2.2 \
+        @azure/msal-node@7.2.3 \
         @grpc/grpc-js@1.14.7 \
         axios@1.21.1 \
         body-parser@2.4.0 \
