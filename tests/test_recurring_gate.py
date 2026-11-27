@@ -1266,7 +1266,13 @@ def assert_digest_scan_and_sbom_gate(case: unittest.TestCase, build: str) -> Non
     # mutable tag would inspect a different artifact than the one that deploys.
     case.assertEqual(scan.count(digest_ref), 3, "every scan must name the build digest")
     case.assertNotIn(":latest", scan)
-    case.assertIn("anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c", scan)
+    # The dependency bot owns this pin. Assert the immutable-SHA contract instead of
+    # duplicating the current hash in a second authority that blocks updates.
+    case.assertRegex(
+        scan,
+        r"(?m)^\s*uses: anchore/sbom-action@[0-9a-f]{40}\s+"
+        r"#\s*v[0-9]+\.[0-9]+\.[0-9]+$",
+    )
     case.assertIn("format: cyclonedx-json", scan)
     case.assertIn("output-file: sbom.cdx.json", scan)
     case.assertIn("syft-version: v1.55.0", scan)
@@ -3668,6 +3674,18 @@ class RecurringContractTest(unittest.TestCase):
         self.assertNotEqual(mutable, build)
         with self.assertRaises(AssertionError):
             assert_digest_scan_and_sbom_gate(self, mutable)
+
+        # Mutation control: a floating SBOM action must fail without requiring
+        # the test to know which immutable release the bot pinned most recently.
+        mutable_sbom = re.sub(
+            r"(?m)^(\s*uses: anchore/sbom-action@)[0-9a-f]{40}",
+            r"\1v0.24.4",
+            build,
+            count=1,
+        )
+        self.assertNotEqual(mutable_sbom, build)
+        with self.assertRaises(AssertionError):
+            assert_digest_scan_and_sbom_gate(self, mutable_sbom)
 
         # Mutation control: a floating SARIF uploader must fail even when its
         # action family is unchanged, so this guard does not merely check that
