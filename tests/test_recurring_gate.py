@@ -1266,7 +1266,7 @@ def assert_digest_scan_and_sbom_gate(case: unittest.TestCase, build: str) -> Non
     # mutable tag would inspect a different artifact than the one that deploys.
     case.assertEqual(scan.count(digest_ref), 3, "every scan must name the build digest")
     case.assertNotIn(":latest", scan)
-    # Dependabot owns this pin. Assert the immutable-SHA contract instead of
+    # The dependency bot owns this pin. Assert the immutable-SHA contract instead of
     # duplicating the current hash in a second authority that blocks updates.
     case.assertRegex(
         scan,
@@ -3676,7 +3676,7 @@ class RecurringContractTest(unittest.TestCase):
             assert_digest_scan_and_sbom_gate(self, mutable)
 
         # Mutation control: a floating SBOM action must fail without requiring
-        # the test to know which immutable release Dependabot pinned most recently.
+        # the test to know which immutable release the bot pinned most recently.
         mutable_sbom = re.sub(
             r"(?m)^(\s*uses: anchore/sbom-action@)[0-9a-f]{40}",
             r"\1v0.24.4",
