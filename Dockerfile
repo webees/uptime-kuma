@@ -136,10 +136,10 @@ RUN set -eu \
 # Kuma's application source.
 RUN cd /app \
     && npm pkg set \
-        "overrides.@louislam/sqlite3.tar=7.5.24" \
-        "overrides.@mapbox/node-pre-gyp.tar=7.5.24" \
-        "overrides.node-gyp.tar=7.5.24" \
-        "overrides.cacache.tar=7.5.24" \
+        "overrides.@louislam/sqlite3.tar=8.0.2" \
+        "overrides.@mapbox/node-pre-gyp.tar=8.0.2" \
+        "overrides.node-gyp.tar=8.0.2" \
+        "overrides.cacache.tar=8.0.2" \
     && npm install --save-exact --omit=dev --no-audit --no-fund \
         @azure/identity@4.14.1 \
         @azure/msal-node@7.2.3 \
@@ -153,8 +153,8 @@ RUN cd /app \
         nodemailer@10.6.1 \
         protobufjs@8.8.1 \
         redbean-node@0.4.0 \
-        tar@7.5.24 \
-        ws@8.23.0 \
+        tar@8.0.2 \
+        ws@8.23.1 \
     # The runtime never installs packages. Removing the generated root lockfile
     # and package-shipped historical lockfiles stops image scanners from
     # inventorying unreachable dev-only dependencies as runtime packages. The
